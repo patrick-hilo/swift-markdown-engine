@@ -506,13 +506,26 @@ enum MarkdownASTStyler {
         }
     }
 
+    /// GFM auto-links: scheme URLs, `www.` hosts, and e-mail addresses. The data
+    /// detector also links bare domains (`example.com`), which GFM keeps as text;
+    /// dropping them makes the contract match and lets a paragraph without any
+    /// marker skip the detector entirely — it ran language identification on
+    /// every restyled paragraph and was a tenth of the per-keystroke CPU.
+    private static let autoLinkMarkers = ["://", "www.", "@"]
+
+    private static func containsAutoLinkMarker(_ ns: NSString, in range: NSRange) -> Bool {
+        autoLinkMarkers.contains { ns.range(of: $0, options: [.caseInsensitive], range: range).location != NSNotFound }
+    }
+
     private static func styleAutoLinks(ctx: Ctx, codeRanges: [NSRange], linkRanges: [NSRange], into attrs: inout [StyledRange]) {
         guard let detector = autoLinkDetector else { return }
-        for scan in ctx.scanRanges {
+        for scan in ctx.scanRanges where containsAutoLinkMarker(ctx.ns, in: scan) {
             detector.enumerateMatches(in: ctx.text, range: scan) { match, _, _ in
-                // Skip URLs inside code and inside a markdown/wiki link's own range — a link's
-                // `(url)` must not become a second `.link` region competing with the link itself.
+                // Skip bare domains, URLs inside code, and URLs inside a markdown/wiki
+                // link's own range — a link's `(url)` must not become a second `.link`
+                // region competing with the link itself.
                 guard let match, let url = match.url,
+                      containsAutoLinkMarker(ctx.ns, in: match.range),
                       !isInCode(match.range, codeRanges),
                       !isInCode(match.range, linkRanges) else { return }
                 attrs.append((match.range, [.link: url]))
