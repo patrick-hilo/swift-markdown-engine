@@ -122,4 +122,95 @@ struct TableImageCacheTests {
 
         #expect(redRender.rendered)
     }
+
+    // A width change must not leave the previous width's bitmap behind: every
+    // live resize step would otherwise add a full set of table bitmaps.
+    @Test func newWidthEvictsPreviousWidthOfSameTable() throws {
+        let source = "| iota | kappa |\n|---|---|\n| 11 | 12 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+
+        _ = MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 2000)
+        _ = MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 1500)
+        let backAtOldWidth = MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 2000)
+
+        #expect(backAtOldWidth.rendered, "the width-2000 image must have been evicted by the width-1500 render")
+    }
+
+    // The cache is process-wide and lives for the whole session; a byte-based
+    // cost limit keeps a document with many tables from pinning hundreds of MiB.
+    @Test func cacheHasByteCostLimit() {
+        #expect(MarkdownStyler.tableImageCache.totalCostLimit > 0)
+    }
+
+    // Tables are anti-aliased text plus a few flat colors: an 8-bit RGBA bitmap
+    // at the backing scale is enough. The drawing-handler NSImage that AppKit
+    // snapshots into a 16-bit float bitmap doubles the memory for nothing.
+    @Test func renderedImageIsEightBitBitmapAtBackingScale() throws {
+        let source = "| lambda | mu |\n|---|---|\n| 13 | 14 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+
+        let image = MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 2000).image
+        let rep = try #require(image.representations.first)
+        let cgImage = try #require(rep.cgImage(forProposedRect: nil, context: nil, hints: nil))
+
+        #expect(cgImage.bitsPerComponent == 8)
+        #expect(cgImage.bitsPerPixel == 32)
+        let scale = MarkdownStyler.tableBitmapScale
+        #expect(scale >= 1)
+        #expect(rep.pixelsWide == Int((image.size.width * scale).rounded(.up)))
+        #expect(rep.pixelsHigh == Int((image.size.height * scale).rounded(.up)))
+        #expect(rep.size == image.size)
+    }
+
+    private func glyphPixelCounts(_ image: NSImage) throws -> (dark: Int, bright: Int) {
+        let cgImage = try #require(image.representations.first?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        var dark = 0, bright = 0
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                // Body text is `labelColor` (85 % alpha); count glyph interiors, not anti-aliased edges.
+                guard let c = rep.colorAt(x: x, y: y), c.alphaComponent > 0.6 else { continue }
+                if c.brightnessComponent < 0.3 { dark += 1 }
+                if c.brightnessComponent > 0.7 { bright += 1 }
+            }
+        }
+        return (dark, bright)
+    }
+
+    // The bitmap must actually contain the table: border pixels at the corner
+    // and opaque glyph pixels inside. A flipped-context mistake would leave it empty.
+    @Test func renderedBitmapContainsBorderAndText() throws {
+        let source = "| nu | xi |\n|---|---|\n| MMMM | 16 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+
+        let image = MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 2000).image
+        let cgImage = try #require(image.representations.first?.cgImage(forProposedRect: nil, context: nil, hints: nil))
+        let corner = try #require(NSBitmapImageRep(cgImage: cgImage).colorAt(x: 0, y: 0))
+        #expect(corner.alphaComponent > 0.1, "outer border must be drawn at the top-left pixel")
+
+        let counts = try glyphPixelCounts(image)
+        #expect(counts.dark + counts.bright > 50, "text glyphs must leave opaque pixels, found \(counts)")
+    }
+
+    // The bitmap is rendered ahead of display, so dynamic text colors must be
+    // resolved under the requested appearance: dark glyphs for aqua, light for dark.
+    @Test func textColorFollowsRenderAppearance() throws {
+        let source = "| omicron | pi |\n|---|---|\n| MMMM | 17 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+        let dark = try #require(NSAppearance(named: .darkAqua))
+
+        let light = try glyphPixelCounts(MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 2000).image)
+        let darkMode = try glyphPixelCounts(MarkdownStyler.tableImage(for: source, parsed: parsed, ctx: ctx, appearance: dark, availableWidth: 2000).image)
+
+        #expect(light.dark > 50 && light.bright == 0, "aqua must draw dark text, got \(light)")
+        #expect(darkMode.bright > 50 && darkMode.dark == 0, "darkAqua must draw light text, got \(darkMode)")
+    }
 }

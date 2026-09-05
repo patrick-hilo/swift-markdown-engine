@@ -115,7 +115,7 @@ struct TableWrappingTests {
 
         #expect(first.rendered)
         #expect(second.rendered)          // width is part of the cache key
-        #expect(!third.rendered)          // same width again → cache hit
+        #expect(third.rendered)           // the width-900 render evicted the width-300 bitmap
         #expect(first.image.size.width != second.image.size.width)
     }
 }

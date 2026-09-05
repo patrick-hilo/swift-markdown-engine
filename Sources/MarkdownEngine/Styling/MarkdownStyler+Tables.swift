@@ -28,14 +28,31 @@ extension MarkdownStyler {
     /// Rendered-table image cache. A table's pixels depend only on its source,
     /// font, colors, and appearance — so identical keys can reuse the NSImage
     /// instead of re-rendering every inactive table on every keystroke.
-    private static let tableImageCache: NSCache<NSString, NSImage> = {
+    static let tableImageCache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         // Must exceed a document's unique-table count or a full restyle (load /
         // theme / font change) re-renders every table (same thrash class as the
         // metadata cap). NSCache still auto-evicts under memory pressure.
         cache.countLimit = 2048
+        // Bitmap bytes are the cost (see `tableImage`): the cache is process-wide
+        // and lives for the whole session, so without a byte cap a document with
+        // many tables pins hundreds of MiB.
+        cache.totalCostLimit = 256 * 1024 * 1024
         return cache
     }()
+
+    /// Latest cache key per table identity (theme + extensions + source, without
+    /// the width). A render at a new width evicts the previous width's bitmap;
+    /// otherwise every live-resize step leaves a full set of table bitmaps behind.
+    /// Guarded by `themeKeyLock` (parallel test runs render off the main thread).
+    private static var latestTableImageKeys: [String: NSString] = [:]
+
+    /// Backing scale the table bitmaps are rasterized at: the largest attached
+    /// screen, so a table stays sharp when its window moves between displays.
+    static var tableBitmapScale: CGFloat {
+        let largest = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        return max(1, largest)
+    }
 
     /// Pixel-level fingerprint of a theme color: its sRGB components resolved
     /// under `appearance`. NSColor descriptions are not sound identities —
@@ -146,9 +163,18 @@ extension MarkdownStyler {
         // highlighted under one config and literal under another — those must
         // never share a cached image.
         let extensionKey = ctx.configuration.extensionRegistry.fingerprint
-        let key = (themeKeyPrefix(ctx: ctx, appearance: appearance) + "|x\(extensionKey)|w\(widthKey)|" + source) as NSString
+        let identity = themeKeyPrefix(ctx: ctx, appearance: appearance) + "|x\(extensionKey)|" + source
+        let key = (identity + "|w\(widthKey)") as NSString
         if let cached = tableImageCache.object(forKey: key) {
             return (cached, false)
+        }
+        themeKeyLock.lock()
+        let previous = latestTableImageKeys[identity]
+        if latestTableImageKeys.count > 4096 { latestTableImageKeys.removeAll() }
+        latestTableImageKeys[identity] = key
+        themeKeyLock.unlock()
+        if let previous, previous != key {
+            tableImageCache.removeObject(forKey: previous)
         }
         let image = renderTable(
             parsed,
@@ -160,8 +186,13 @@ extension MarkdownStyler {
             availableWidth: availableWidth,
             extensions: ctx.configuration.extensions
         )
-        tableImageCache.setObject(image, forKey: key)
+        tableImageCache.setObject(image, forKey: key, cost: bitmapByteCount(of: image))
         return (image, true)
+    }
+
+    private static func bitmapByteCount(of image: NSImage) -> Int {
+        guard let cgImage = image.representations.first?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0 }
+        return cgImage.bytesPerRow * cgImage.height
     }
 
     static func styleTables(_ ctx: StylingContext) -> [StyledRange] {
@@ -655,8 +686,9 @@ extension MarkdownStyler {
         let alignments = table.alignments
         let headerFill = mutedColor(alpha: 0.08)
 
-        // Flipped image so AppKit handles the y-flip; a manual transform mirror would flip glyphs too.
-        return NSImage(size: size, flipped: true) { _ in
+        // Drawn top-down into a flipped context (see `bitmapImage`), so the
+        // layout offsets above map 1:1 and AppKit keeps the glyphs upright.
+        let draw: () -> Void = {
             // Header row fill
             headerFill.setFill()
             NSBezierPath(rect: NSRect(
@@ -729,8 +761,49 @@ extension MarkdownStyler {
                     drawCell(cell, col: col, row: rowIdx + 1)
                 }
             }
-            return true
         }
+        return bitmapImage(size: size, appearance: appearance, draw: draw)
+    }
+
+    /// Rasterizes `draw` into an 8-bit RGBA `CGImage` at `tableBitmapScale` and
+    /// wraps it in an `NSImage` of `size` points.
+    ///
+    /// A drawing-handler `NSImage` would let AppKit snapshot the table into a
+    /// bitmap in the window's own format — on wide-gamut displays that is 16-bit
+    /// float, 8 bytes per pixel. Tables are anti-aliased text and a few flat
+    /// colors; 8 bits per channel is enough and halves the memory. The bitmap is
+    /// CG-owned (not an `NSBitmapImageRep` buffer) so the wide-table overlays'
+    /// layers can share it with the render server instead of copying it. The
+    /// context is flipped so the top-down cell offsets draw directly and text
+    /// stays upright. `appearance` resolves the dynamic colors while drawing.
+    static func bitmapImage(size: NSSize, appearance: NSAppearance, draw: () -> Void) -> NSImage {
+        let scale = tableBitmapScale
+        let pixelsWide = max(1, Int((size.width * scale).rounded(.up)))
+        let pixelsHigh = max(1, Int((size.height * scale).rounded(.up)))
+        let image = NSImage(size: size)
+        guard let cgContext = CGContext(
+            data: nil,
+            width: pixelsWide,
+            height: pixelsHigh,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            return image
+        }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: cgContext, flipped: true)
+        cgContext.translateBy(x: 0, y: CGFloat(pixelsHigh))
+        cgContext.scaleBy(x: scale, y: -scale)
+        // The bitmap is rendered ahead of display, so dynamic colors (text, code
+        // background) must resolve under the text view's appearance here, not
+        // under whatever is current when the image is later drawn.
+        appearance.performAsCurrentDrawingAppearance { draw() }
+        NSGraphicsContext.restoreGraphicsState()
+        guard let cgImage = cgContext.makeImage() else { return image }
+        image.addRepresentation(NSBitmapImageRep(cgImage: cgImage).withSize(size))
+        return image
     }
 
     // MARK: - Scrollable table helpers
@@ -766,5 +839,12 @@ extension MarkdownStyler {
         hasher.combine(source)
         hasher.combine(occurrenceIndex)
         return hasher.finalize()
+    }
+}
+
+private extension NSBitmapImageRep {
+    func withSize(_ size: NSSize) -> NSBitmapImageRep {
+        self.size = size
+        return self
     }
 }
