@@ -107,6 +107,9 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     /// True while a staged turn re-scrolls to keep the viewport anchored; the scroll
     /// observer must not pull chunks from inside that adjustment.
     var isKeepingViewportAnchor = false
+    /// Text container width when the head was styled; the finish restyles the head's
+    /// tables if the reading column changed width before the chunks ran.
+    var stagedStylingContainerWidth: CGFloat = 0
     var lastSyncedText: String
     var isProgrammaticEdit: Bool = false
     var isWritingToolsActive: Bool = false

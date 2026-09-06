@@ -218,6 +218,7 @@ extension MarkdownStyler {
             neededLengths.insert(token.range.length)
         }
         var skippedCount = 0
+        var wideCount = 0
         var metaNanos: UInt64 = 0
         for (idx, token) in tableIndexed {
             tableCount += 1
@@ -281,6 +282,7 @@ extension MarkdownStyler {
             let imageBounds = CGRect(x: 0, y: 0, width: image.size.width, height: image.size.height)
             // Wide tables → scrollable mode (NSScrollView overlay); narrow → collapsed.
             let isWide = image.size.width > containerWidth + 0.5
+            if isWide { wideCount += 1 }
             let computedSourceID = stableTableSourceID(
                 for: source,
                 occurrenceIndex: occurrenceIndex
@@ -309,7 +311,7 @@ extension MarkdownStyler {
         if tableCount > 0 {
             let ms = Double(DispatchTime.now().uptimeNanoseconds - tablesT0) / 1_000_000
             let metaMs = Double(metaNanos) / 1_000_000
-            PerfTrace.note { "styleTables scanned=\(tableCount) tables (skipped=\(skippedCount)), re-rendered=\(renderedCount) NSImage in \(String(format: "%.2f", ms))ms (substring+meta=\(String(format: "%.2f", metaMs))ms)" }
+            PerfTrace.note { "styleTables width=\(Int(effectiveContainerWidth(for: ctx))) wide=\(wideCount) scanned=\(tableCount) tables (skipped=\(skippedCount)), re-rendered=\(renderedCount) NSImage in \(String(format: "%.2f", ms))ms (substring+meta=\(String(format: "%.2f", metaMs))ms)" }
         }
         return attrs
     }

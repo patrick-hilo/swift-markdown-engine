@@ -84,6 +84,7 @@ extension NativeTextViewCoordinator {
         stagedStylingPending = plan.pending
         stagedLayoutEnd = 0
         stagedStylingActive = true
+        stagedStylingContainerWidth = textView?.textContainer?.size.width ?? 0
         if let native = textView as? NativeTextView {
             native.contentHeightIsEstimated = true
             native.estimatedContentHeightFloor = 0
@@ -181,9 +182,19 @@ extension NativeTextViewCoordinator {
         guard let scrollView = textView.enclosingScrollView else { return }
         // Everything is laid out, so the forced measurement only enumerates; it
         // turns the estimate the open path worked with into the exact height.
+        // The head was styled on the first update pass. SwiftUI hands the editor a
+        // provisional width there (925 pt for an 800-pt window on the Mini), the reading
+        // column settles later, and with a reading column a width change restyles no
+        // tables; the chunks then rendered their tables for the real width. One pass over
+        // the table paragraphs makes the head match.
+        if let width = textView.textContainer?.size.width, abs(width - stagedStylingContainerWidth) > 0.5 {
+            native.restyleTableParagraphsForWidthChange()
+        }
         native.pendingFullLayoutMeasure = true
         native.recalcOverscroll(for: scrollView, debugTag: "staged")
         (scrollView as? ClampedScrollView)?.clampToInsets()
+        // The chunk restyles skipped the overlay reconcile; one pass against the exact layout.
+        DispatchQueue.main.async { [weak native] in native?.updateWideTableOverlays() }
     }
 
     // MARK: - Viewport

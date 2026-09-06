@@ -365,7 +365,7 @@ extension NativeTextView {
     }
 
     /// Restyle only table paragraphs via stamped anchor ranges; avoids re-tokenizing the doc.
-    private func restyleTableParagraphsForWidthChange() {
+    func restyleTableParagraphsForWidthChange() {
         guard let storage = textStorage,
               let coord = delegate as? NativeTextViewCoordinator else { return }
         var ranges: [NSRange] = []

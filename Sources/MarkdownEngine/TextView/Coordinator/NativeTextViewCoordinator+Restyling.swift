@@ -281,8 +281,11 @@ extension NativeTextViewCoordinator {
             precomputedBlocks: blocks,
             configuration: configuration
         )
-        // Reconcile wide-table overlays after layout settles.
-        if let nativeTextView = textView as? NativeTextView {
+        // Reconcile wide-table overlays after layout settles. Not per chunk of a staged
+        // open: every reconcile against the estimated geometry of that phase left
+        // rendered layers behind (a 441-kB document with wide tables sat at 358 MiB
+        // instead of 222 after opening); the finish reconciles once.
+        if !stagedStylingActive, let nativeTextView = textView as? NativeTextView {
             DispatchQueue.main.async { [weak nativeTextView] in
                 nativeTextView?.updateWideTableOverlays()
             }
