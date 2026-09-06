@@ -74,8 +74,15 @@ final class NativeTextView: NSTextView {
     /// Persisted horizontal scroll offset per wide table; survives restyles.
     var tableHorizontalScrollOffsets: [Int: CGFloat] = [:]
 
+    /// Appearance the document was last styled under. SwiftUI hosting re-applies the
+    /// window's appearance to the view right after it was created, which fires this
+    /// callback without any visible change; a full restyle of a large document there
+    /// doubled the time to the first frame.
+    var lastStyledAppearanceName: NSAppearance.Name?
+
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        guard effectiveAppearance.name != lastStyledAppearanceName else { return }
         // Forward appearance changes to the embedder's highlighter via its registered notification.
         if let name = configuration.services.syntaxHighlighter.appearanceDidChangeNotification {
             NotificationCenter.default.post(name: name, object: self)

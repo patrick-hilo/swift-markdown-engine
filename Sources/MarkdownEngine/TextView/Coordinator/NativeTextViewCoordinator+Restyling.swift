@@ -25,6 +25,7 @@ extension NativeTextViewCoordinator {
         // at the end of this method.
         isRebuildingDocument = true
         defer { isRebuildingDocument = false }
+        (textView as? NativeTextView)?.lastStyledAppearanceName = textView.effectiveAppearance.name
         // A rebuild means a different document (or a mode flip): drop the caret
         // ink resolved for the old one instead of carrying it into this text.
         resolvedCaretColor = nil
@@ -204,6 +205,7 @@ extension NativeTextViewCoordinator {
     ) {
         // Raw mode: no restyling; typing keeps base attrs via the typing shim.
         guard !configuration.rawSourceMode else { return }
+        (textView as? NativeTextView)?.lastStyledAppearanceName = textView.effectiveAppearance.name
         let (baseFont, paragraphStyle) = TextStylingService.makeBaseFontAndStyle(
             fontName: fontName,
             fontSize: fontSize,

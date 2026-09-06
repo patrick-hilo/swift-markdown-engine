@@ -80,9 +80,9 @@ enum MarkdownASTStyler {
         shrinkInactiveMarkers(in: blocks, ctx: ctx, into: &attrs)
 
         // Text/regex passes (AST-agnostic); AST code ranges drive the "skip inside code" checks.
-        let codeRanges = collectCodeRanges(in: blocks)
-        let checkboxRanges = collectCheckboxRanges(in: blocks)
-        let linkRanges = collectLinkRanges(in: blocks)
+        let codeRanges = RangeIndex(collectCodeRanges(in: blocks))
+        let checkboxRanges = RangeIndex(collectCheckboxRanges(in: blocks))
+        let linkRanges = RangeIndex(collectLinkRanges(in: blocks))
         styleAutoLinks(ctx: ctx, codeRanges: codeRanges, linkRanges: linkRanges, into: &attrs)
         styleIncompleteLinkBrackets(ctx: ctx, codeRanges: codeRanges, checkboxRanges: checkboxRanges, into: &attrs)
         return attrs
@@ -118,8 +118,45 @@ enum MarkdownASTStyler {
         return ranges
     }
 
-    private static func isInCode(_ range: NSRange, _ codeRanges: [NSRange]) -> Bool {
-        codeRanges.contains { NSIntersectionRange($0, range).length > 0 }
+    /// Ranges in document order with a running maximum of their ends, so "does anything
+    /// here touch this range" is two binary searches. A long note has thousands of code
+    /// spans and thousands of candidates; scanning the whole list per candidate was the
+    /// largest post in styling it.
+    struct RangeIndex {
+        private let ranges: [NSRange]
+        private let endsUpTo: [Int]
+
+        init(_ unsorted: [NSRange]) {
+            ranges = unsorted.sorted { $0.location < $1.location }
+            var ends: [Int] = []
+            ends.reserveCapacity(ranges.count)
+            var running = 0
+            for range in ranges {
+                running = max(running, NSMaxRange(range))
+                ends.append(running)
+            }
+            endsUpTo = ends
+        }
+
+        var isEmpty: Bool { ranges.isEmpty }
+
+        func intersects(_ range: NSRange) -> Bool {
+            // Every range that can intersect starts before `range` ends; among those, one
+            // reaching past the start of `range` is an intersection, and the running maximum
+            // says whether such a range exists.
+            var low = 0
+            var high = ranges.count
+            while low < high {
+                let middle = (low + high) / 2
+                if ranges[middle].location < NSMaxRange(range) { low = middle + 1 } else { high = middle }
+            }
+            guard low > 0 else { return false }
+            return endsUpTo[low - 1] > range.location
+        }
+    }
+
+    private static func isInCode(_ range: NSRange, _ index: RangeIndex) -> Bool {
+        index.intersects(range)
     }
 
     /// Full ranges of markdown links `[text](url)` and wiki links `[[…]]`. The NSDataDetector
@@ -517,9 +554,17 @@ enum MarkdownASTStyler {
         autoLinkMarkers.contains { ns.range(of: $0, options: [.caseInsensitive], range: range).location != NSNotFound }
     }
 
-    private static func styleAutoLinks(ctx: Ctx, codeRanges: [NSRange], linkRanges: [NSRange], into attrs: inout [StyledRange]) {
+    private static func styleAutoLinks(ctx: Ctx, codeRanges: RangeIndex, linkRanges: RangeIndex, into attrs: inout [StyledRange]) {
         guard let detector = autoLinkDetector else { return }
+        // The detector runs paragraph by paragraph and only where a marker sits: over a
+        // whole document it tokenised and language-tagged every line, most of them without a URL.
+        var paragraphs: [NSRange] = []
         for scan in ctx.scanRanges where containsAutoLinkMarker(ctx.ns, in: scan) {
+            ctx.ns.enumerateSubstrings(in: scan, options: [.byParagraphs, .substringNotRequired]) { _, range, _, _ in
+                if containsAutoLinkMarker(ctx.ns, in: range) { paragraphs.append(range) }
+            }
+        }
+        for scan in paragraphs {
             detector.enumerateMatches(in: ctx.text, range: scan) { match, _, _ in
                 // Skip bare domains, URLs inside code, and URLs inside a markdown/wiki
                 // link's own range — a link's `(url)` must not become a second `.link`
@@ -533,7 +578,7 @@ enum MarkdownASTStyler {
         }
     }
 
-    private static func styleIncompleteLinkBrackets(ctx: Ctx, codeRanges: [NSRange], checkboxRanges: [NSRange], into attrs: inout [StyledRange]) {
+    private static func styleIncompleteLinkBrackets(ctx: Ctx, codeRanges: RangeIndex, checkboxRanges: RangeIndex, into attrs: inout [StyledRange]) {
         // Every pattern starts with `\[`, so no `[` in the text ⇒ no match: skip
         // all 6 regex sweeps (the 78ms on hits=0 docs).
         guard ctx.ns.range(of: "[").location != NSNotFound else { return }
