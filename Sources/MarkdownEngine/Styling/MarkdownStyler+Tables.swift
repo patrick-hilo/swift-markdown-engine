@@ -446,7 +446,7 @@ extension MarkdownStyler {
         return NSFont(descriptor: baseDescriptor.withSymbolicTraits(traits), size: pointSize) ?? current
     }
 
-    /// Walk the inline AST into marker-stripped runs; LaTeX as attachments, links/embeds emitted raw.
+    /// Walk the inline AST into marker-stripped runs; LaTeX as attachments, images emitted raw.
     private static func appendInlineCell(
         _ nodes: [InlineNode],
         in ns: NSString,
@@ -469,6 +469,18 @@ extension MarkdownStyler {
         func appendPlain(_ range: NSRange, _ f: NSFont) {
             out.append(NSAttributedString(string: ns.substring(with: range),
                                           attributes: [.font: f, .foregroundColor: theme.bodyText]))
+        }
+        /// Draw a link's label in link colour, or its source when the label is empty —
+        /// `[](url)` would otherwise leave the cell blank.
+        func appendLinkLabel(_ source: NSRange, _ f: NSFont, _ label: () -> Void) {
+            let start = out.length
+            label()
+            guard out.length > start else {
+                appendPlain(source, f)
+                return
+            }
+            out.addAttribute(.foregroundColor, value: theme.link,
+                             range: NSRange(location: start, length: out.length - start))
         }
         for node in nodes {
             switch node {
@@ -511,10 +523,17 @@ extension MarkdownStyler {
                 } else {
                     appendPlain(range, font)   // renderer unavailable → keep raw `$…$`
                 }
-            case .link(let range, _, _, _, _),
-                 .image(let range, _, _, _),
-                 .wikiLink(let range, _, _, _),
+            case .link(let range, let textRange, _, _, let children):
+                // The whole `[text](url)` used to be drawn, so one long URL decided the
+                // column width. Only the label is shown, like everywhere else in the body.
+                appendLinkLabel(range, font) {
+                    if children.isEmpty { appendPlain(textRange, font) } else { recurse(children, font) }
+                }
+            case .wikiLink(let range, let name, _, _):
+                appendLinkLabel(range, font) { appendPlain(name, font) }
+            case .image(let range, _, _, _),
                  .imageEmbed(let range, _, _):
+                // A cell rasterizes at a fixed width and has nowhere to size an image.
                 appendPlain(range, font)
             }
         }

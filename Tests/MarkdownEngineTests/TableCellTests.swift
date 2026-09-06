@@ -35,6 +35,39 @@ struct TableCellTests {
         return font.fontDescriptor.symbolicTraits
     }
 
+    /// A cell used to draw the whole `[text](url)` source, so one long URL decided the
+    /// column width and pushed everything after it out of view.
+    @Test func linkShowsItsLabelInLinkColor() {
+        let s = cell("[BingogoSSD auf eBay.de](https://www.ebay.de/itm/358654760269)")
+        #expect(s.string == "BingogoSSD auf eBay.de")
+        let color = s.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        #expect(color == MarkdownEditorConfiguration.default.theme.link)
+    }
+
+    @Test func linkLabelKeepsItsInlineFormatting() {
+        let s = cell("[**bold** label](https://example.com/a/very/long/path/that/would/dominate)")
+        #expect(s.string == "bold label")
+        #expect(traits(s, "b").contains(.bold))
+    }
+
+    @Test func emptyLinkLabelFallsBackToItsSource() {
+        let s = cell("[](https://example.com)")
+        #expect(s.string == "[](https://example.com)")
+    }
+
+    @Test func wikiLinkShowsItsNameWithoutTheTarget() {
+        let s = cell("[[Angebot|8f2c1d9e-4b7a]]")
+        #expect(s.string == "Angebot")
+        let color = s.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        #expect(color == MarkdownEditorConfiguration.default.theme.link)
+    }
+
+    /// Images stay raw: a cell rasterizes at a fixed width and has no place to size one.
+    @Test func imageKeepsItsSourceInACell() {
+        let s = cell("![Diagramm](https://example.com/plan.png)")
+        #expect(s.string == "![Diagramm](https://example.com/plan.png)")
+    }
+
     @Test func plainCellHasNoEmphasis() {
         let s = cell("hello")
         #expect(s.string == "hello")
