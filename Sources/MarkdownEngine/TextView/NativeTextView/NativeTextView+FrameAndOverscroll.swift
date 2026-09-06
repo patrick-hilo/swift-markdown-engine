@@ -41,8 +41,11 @@ extension NativeTextView {
 
         let baseHeightChanged = abs(measured - baseContentHeight) > 0.5
         let overscrollChanged = abs(resolvedOverscroll - activeBottomOverscroll) > 0.5
-        // Height settled → stop forcing full layout (until the next switch/resize).
-        if !(baseHeightChanged || overscrollChanged) { pendingFullLayoutMeasure = false }
+        // One forced full layout makes the height exact; the flag re-arms on the next
+        // switch or resize. Waiting for the height to settle instead kept the flag up
+        // through every edit after a resize, and each paste into a long document then
+        // paid a full document layout on the main thread.
+        if forcedFullLayout || !(baseHeightChanged || overscrollChanged) { pendingFullLayoutMeasure = false }
         // A persistent fullLayout=1 with hChanged/osChanged flipping every
         // keystroke = the bistable-height loop: every keystroke then pays a
         // FULL document ensureLayout inside the overscroll span.
@@ -92,6 +95,21 @@ extension NativeTextView {
             visibleHeight: visibleHeight,
             lineHeight: lineHeight
         )
+    }
+
+    /// Lays out the paragraphs of an edit so the next height measurement is exact there.
+    /// TextKit estimates the height of fragments it has not laid out yet; measuring from
+    /// the document end after a paste would otherwise under-count the pasted paragraphs.
+    func ensureLayout(forCharacterRange range: NSRange) {
+        guard let layoutManager = textLayoutManager, let content = layoutManager.textContentManager,
+              range.location != NSNotFound else { return }
+        let length = (string as NSString).length
+        let start = min(range.location, length)
+        let end = min(NSMaxRange(range), length)
+        guard let from = content.location(layoutManager.documentRange.location, offsetBy: start),
+              let to = content.location(layoutManager.documentRange.location, offsetBy: end),
+              let textRange = NSTextRange(location: from, end: to) else { return }
+        layoutManager.ensureLayout(for: textRange)
     }
 
     func measuredBaseContentHeight(minimumHeight: CGFloat, forceFullLayout: Bool = false) -> CGFloat {

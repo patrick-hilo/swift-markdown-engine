@@ -368,6 +368,7 @@ extension NativeTextViewCoordinator {
         PerfTrace.measure("overscroll") {
             if let bottomTextView = tv as? NativeTextView,
                let scrollView = tv.enclosingScrollView {
+                bottomTextView.ensureLayout(forCharacterRange: editedRange)
                 bottomTextView.recalcOverscroll(for: scrollView, debugTag: "textDidChange")
                 (scrollView as? ClampedScrollView)?.clampToInsets()
             }
