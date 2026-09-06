@@ -71,6 +71,7 @@ enum MarkdownASTStyler {
             extensionsByID: configuration.extensionsByID,
             wikiLinkID: wikiLinkIDProvider,
             scopedRanges: scopedRanges,
+            scopeIndex: scopedRanges.map(RangeIndex.init),
             orderedDisplayNumbers: computeOrderedDisplayNumbers(blocks: blocks, ns: ns)
         )
         var attrs: [StyledRange] = []
@@ -127,7 +128,8 @@ enum MarkdownASTStyler {
         private let endsUpTo: [Int]
 
         init(_ unsorted: [NSRange]) {
-            ranges = unsorted.sorted { $0.location < $1.location }
+            // An empty range intersects nothing, as with NSIntersectionRange.
+            ranges = unsorted.filter { $0.length > 0 }.sorted { $0.location < $1.location }
             var ends: [Int] = []
             ends.reserveCapacity(ranges.count)
             var running = 0
@@ -141,6 +143,7 @@ enum MarkdownASTStyler {
         var isEmpty: Bool { ranges.isEmpty }
 
         func intersects(_ range: NSRange) -> Bool {
+            guard range.length > 0 else { return false }
             // Every range that can intersect starts before `range` ends; among those, one
             // reaching past the start of `range` is an intersection, and the running maximum
             // says whether such a range exists.
@@ -641,6 +644,9 @@ enum MarkdownASTStyler {
         let extensionsByID: [String: any MarkdownExtension]
         let wikiLinkID: (NSRange) -> String?
         let scopedRanges: [NSRange]?
+        /// The scoped ranges in document order for the per-block scope test; a paste of
+        /// many paragraphs scopes hundreds of ranges, and every block asked about all of them.
+        let scopeIndex: RangeIndex?
         let orderedDisplayNumbers: [Int: Int]
 
         /// True when a non-empty selection overlaps `range` — the selection
@@ -662,8 +668,8 @@ enum MarkdownASTStyler {
         var fullRange: NSRange { NSRange(location: 0, length: ns.length) }
         /// Whether a range falls in the styled region (nil scope = whole doc).
         func inScope(_ r: NSRange) -> Bool {
-            guard let scopedRanges else { return true }
-            return scopedRanges.contains { NSIntersectionRange($0, r).length > 0 }
+            guard let scopeIndex else { return true }
+            return scopeIndex.intersects(r)
         }
         /// Ranges the regex/text passes scan (edited paragraphs, or whole doc).
         var scanRanges: [NSRange] { scopedRanges ?? [fullRange] }
