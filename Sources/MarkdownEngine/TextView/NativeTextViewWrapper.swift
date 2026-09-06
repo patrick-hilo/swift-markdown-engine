@@ -266,8 +266,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.isEditable = isEditable
         textView.isSelectable = true
         textView.isRichText = true
-        let initialState = WikiLinkService.makeDisplayState(from: text) { configuration.services.wikiLinks.name(forID: $0) }
-        textView.string = initialState.display
+        // The text goes in with the first update pass, together with its attributes; a
+        // plain-text set here would only be replaced again, at the cost of a full
+        // storage edit on a layout-connected text view.
         textView.delegate = context.coordinator
         textView.isVerticallyResizable = true
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
@@ -327,7 +328,6 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         scrollView.reflectScrolledClipView(scrollView.contentView)
 
         context.coordinator.textView = textView
-        context.coordinator.wikiLinkMetadata = initialState.metadata
         context.coordinator.onCaretRectChange = onCaretRectChange
         context.coordinator.onTextMutation = onTextMutation
         context.coordinator.onBuildContextMenu = onBuildContextMenu

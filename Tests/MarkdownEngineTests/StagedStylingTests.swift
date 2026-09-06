@@ -64,7 +64,9 @@ private func expectSameStyle(
         return
     }
     if let index = zip(staged, reference).enumerated().first(where: { $0.element.0 != $0.element.1 })?.offset {
-        Issue.record("attributes differ at character \(index * sampleStride): staged=\(staged[index]) reference=\(reference[index])",
+        let keys = Set(staged[index].keys).union(reference[index].keys).filter { staged[index][$0] != reference[index][$0] }
+        let detail = keys.map { "\($0.rawValue): staged=\(String(describing: staged[index][$0])) reference=\(String(describing: reference[index][$0]))" }
+        Issue.record("attributes differ at character \(index * sampleStride) in \(detail.joined(separator: " | "))",
                      sourceLocation: sourceLocation)
     }
 }

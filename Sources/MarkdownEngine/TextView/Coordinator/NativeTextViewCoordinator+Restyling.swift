@@ -53,12 +53,14 @@ extension NativeTextViewCoordinator {
         // the ensureLayout below rebuilds from scratch anyway. This rebuild's own
         // ensureLayout IS that one-shot per-document layout.
         didEnsureLayoutForCurrentDocument = true
-        PerfTrace.measure("setString") {
-            if textView.string != displayText {
-                textView.string = displayText
-                parseGeneration &+= 1
-            }
+        // A different text (first open, document switch) goes in with its attributes
+        // in one insertion below; only a rebuild of the same text writes attributes
+        // onto the live storage.
+        let textChanges = PerfTrace.measure("setString") {
+            // The length check spares the O(n) bridge and compare on the first open.
+            (textView.textStorage?.length ?? -1) != (displayText as NSString).length || textView.string != displayText
         }
+        if textChanges { parseGeneration &+= 1 }
         lastSyncedText = text
         lastComputedStorage = text
         previousDisplayLength = (displayText as NSString).length
@@ -86,12 +88,17 @@ extension NativeTextViewCoordinator {
         // ── Root cause & fix (2026-07) ────────────────────────────────────────
         // CPU+page-fault instrumentation proved the first per-process open of a large
         // note spent 12.5s of PURE CPU (blocked=2ms), writing 69k attributes to the LIVE
-        // TextKit-2 storage and faulting in 315k pages / ~5GB; a later open with warm
-        // pages does the identical work in 78ms. So the whole styled string is built on a
-        // DETACHED NSMutableAttributedString and handed to the live storage in ONE
-        // transfer — the expensive first-touch happens off the layout-connected storage.
-        let built = NSMutableAttributedString(string: displayText)
-        built.setAttributes(baseAttrs, range: fullRange)
+        // TextKit-2 storage with per-key `addAttribute` and faulting in 315k pages / ~5GB.
+        // The styled runs are therefore coalesced first (see below) and written with ONE
+        // `setAttributes` per run, to a detached string that goes into the storage with
+        // the text in one insertion. Replacing text the layout-connected storage already
+        // held cost 160 ms for 570k characters on the Mini (Debug), attribute writes over
+        // the whole live storage 210 ms; an insertion into the empty storage is nearly
+        // free, so `makeNSView` no longer sets the text ahead of the first rebuild.
+        guard let liveStorage = textView.textStorage else { return }
+        let storage: NSMutableAttributedString = textChanges ? NSMutableAttributedString(string: displayText) : liveStorage
+        if !textChanges { liveStorage.beginEditing() }
+        storage.setAttributes(baseAttrs, range: fullRange)
 
         // Kept for the end-of-rebuild selection replay (see below); raw mode leaves it nil.
         var parsedForReplay: ParsedDocument?
@@ -105,11 +112,14 @@ extension NativeTextViewCoordinator {
             let parsed = PerfTrace.measure("parse") { parsedDocument(for: displayText) }
             parsedForReplay = parsed
             let tokens = parsed.tokens
+            // AppKit puts the selection at the end of replaced text, so a rebuild with new
+            // text styles for the caret it will have after the transfer below.
+            let styledSelection = textChanges ? NSRange(location: nsDisplay.length, length: 0) : textView.selectedRange()
             // Hide caret from styling when read-only, else clicks reveal raw token syntax.
-            let caretLocation = textView.isEditable ? textView.selectedRange().location : -1
+            let caretLocation = textView.isEditable ? styledSelection.location : -1
             activeTokenIndices = activeTokenIndices(
                 parsed: parsed,
-                selection: textView.selectedRange(),
+                selection: styledSelection,
                 in: nsDisplay,
                 suppressed: !textView.isEditable
             )
@@ -123,7 +133,7 @@ extension NativeTextViewCoordinator {
                 caretLocation: caretLocation,
                 // Selection-revealed syntax (task checkboxes) needs the full
                 // range, not just the caret; read-only suppresses it like the caret.
-                selection: textView.isEditable ? textView.selectedRange() : nil,
+                selection: textView.isEditable ? styledSelection : nil,
                 activeTokenIndices: activeTokenIndices,
                 // FIX: apply .wikiLinkID attributes on load/node-switch too. Without this the uuid
                 // survived only in the range-keyed wikiLinkMetadata; once a later writeback shifted a
@@ -155,7 +165,7 @@ extension NativeTextViewCoordinator {
                 let runs = MarkdownStyler.flattenedRuns(ranges, base: baseAttrs,
                                                         documentLength: fullRange.length)
                 for (range, attrs) in runs {
-                    built.setAttributes(attrs, range: range)
+                    storage.setAttributes(attrs, range: range)
                 }
             }
             // The styler writes `.wikiLinkID` only for the head; the tail gets it from
@@ -168,17 +178,20 @@ extension NativeTextViewCoordinator {
                     guard let id = metadata.id, key.location + key.length <= fullRange.length else { continue }
                     let openLength = nsDisplay.character(at: key.location) == 0x21 ? 3 : 2   // "![[" or "[["
                     let content = NSRange(location: key.location + openLength, length: key.length - openLength - 2)
-                    if content.length > 0 { built.addAttribute(.wikiLinkID, value: id, range: content) }
+                    if content.length > 0 { storage.addAttribute(.wikiLinkID, value: id, range: content) }
                 }
             }
         }
 
-        // ONE live-storage mutation carries the whole styled document across. This is the
-        // only edit that touches the layout-connected storage.
+        // One edit transaction: either the new text with its attributes replaces what the
+        // storage held (an insertion into the empty storage on the first open), or the
+        // attribute writes above land on the live storage.
         PerfTrace.measure("transfer") {
-            textView.textStorage?.beginEditing()
-            textView.textStorage?.setAttributedString(built)
-            textView.textStorage?.endEditing()
+            if textChanges {
+                liveStorage.beginEditing()
+                liveStorage.setAttributedString(storage)
+            }
+            liveStorage.endEditing()
         }
 
 
