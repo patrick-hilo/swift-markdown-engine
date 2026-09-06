@@ -216,9 +216,16 @@ enum MarkdownASTStyler {
     // Built once, reused: rebuilding these on every restyle cost 43ms (detector)
     // + 78ms (6 regexes) on a 346k note with hits=0 (ENG-8g1b/c).
     private static let autoLinkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    private static let incompleteLinkPatterns: [NSRegularExpression] =
+    /// `anchorsToScanEnd` is derived from the pattern text itself (a trailing `$`)
+    /// rather than a separate index list, so reordering or editing the patterns
+    /// below can't silently desync which ones may run on a narrowed range.
+    private static let incompleteLinkPatterns: [(regex: NSRegularExpression, anchorsToScanEnd: Bool)] =
         [#"\[\]"#, #"\[\[\]\]"#, #"\[[^\]\r\n]*$"#, #"\[[^\]\r\n]+\](?!\()"#,
-         #"\[[^\]\r\n]+\]\([^)\r\n]*$"#, #"\[[^\]\r\n]+\]\(\)"#].compactMap { regex($0, false) }
+         #"\[[^\]\r\n]+\]\([^)\r\n]*$"#, #"\[[^\]\r\n]+\]\(\)"#]
+            .compactMap { pattern -> (NSRegularExpression, Bool)? in
+                guard let re = regex(pattern, false) else { return nil }
+                return (re, pattern.hasSuffix("$"))
+            }
 
     /// Tag a thematic-break line for a full-width rule (AST-driven); suppressed while the caret edits it.
     ///
@@ -587,34 +594,61 @@ enum MarkdownASTStyler {
         guard ctx.ns.range(of: "[").location != NSNotFound else { return }
         let muted = ctx.theme.mutedText
         let faded = ctx.theme.incompleteLink.withAlphaComponent(ctx.config.link.incompleteLinkAlpha)
-        for re in incompleteLinkPatterns {
-            for scan in ctx.scanRanges {
-              for m in re.matches(in: ctx.text, options: [], range: scan)
-                  where !isInCode(m.range, codeRanges) && !isInCode(m.range, checkboxRanges) {
-                // One range per RUN of same-colored characters, not per character: a
-                // single `[Design System]` used to emit 15 ranges, and the note in the
-                // bug report reached 25,504 from this pass alone — every one of them a
-                // separate storage mutation downstream.
-                var runStart = m.range.location
-                var runLength = 0
-                var runIsBracket = false
-                for ch in ctx.ns.substring(with: m.range) {
-                    let isBracket = ch == "[" || ch == "]" || ch == "(" || ch == ")"
-                    let width = ch.utf16.count
-                    if runLength > 0, isBracket != runIsBracket {
-                        attrs.append((NSRange(location: runStart, length: runLength),
-                                      [.foregroundColor: runIsBracket ? muted : faded]))
-                        runStart += runLength
-                        runLength = 0
-                    }
-                    runIsBracket = isBracket
-                    runLength += width
-                }
-                if runLength > 0 {
+
+        func applyMatch(_ range: NSRange) {
+            // One range per RUN of same-colored characters, not per character: a
+            // single `[Design System]` used to emit 15 ranges, and the note in the
+            // bug report reached 25,504 from this pass alone — every one of them a
+            // separate storage mutation downstream.
+            var runStart = range.location
+            var runLength = 0
+            var runIsBracket = false
+            for ch in ctx.ns.substring(with: range) {
+                let isBracket = ch == "[" || ch == "]" || ch == "(" || ch == ")"
+                let width = ch.utf16.count
+                if runLength > 0, isBracket != runIsBracket {
                     attrs.append((NSRange(location: runStart, length: runLength),
                                   [.foregroundColor: runIsBracket ? muted : faded]))
+                    runStart += runLength
+                    runLength = 0
                 }
-              }
+                runIsBracket = isBracket
+                runLength += width
+            }
+            if runLength > 0 {
+                attrs.append((NSRange(location: runStart, length: runLength),
+                              [.foregroundColor: runIsBracket ? muted : faded]))
+            }
+        }
+
+        // Two patterns anchor `$` to the end of the scanned range itself (an
+        // incomplete bracket trailing off at the caret); narrowing their range
+        // would move that anchor and change what they catch, so they alone keep
+        // scanning `ctx.scanRanges` whole.
+        for entry in incompleteLinkPatterns where entry.anchorsToScanEnd {
+            for scan in ctx.scanRanges {
+                for m in entry.regex.matches(in: ctx.text, options: [], range: scan)
+                    where !isInCode(m.range, codeRanges) && !isInCode(m.range, checkboxRanges) {
+                    applyMatch(m.range)
+                }
+            }
+        }
+
+        // The remaining four patterns match entirely within one line — `[^\]\r\n]`
+        // already rules out crossing a line break — so narrowing them to the lines
+        // that carry a `[` at all is safe; in a full restyle most lines do not.
+        var bracketLines: [NSRange] = []
+        for scan in ctx.scanRanges {
+            ctx.ns.enumerateSubstrings(in: scan, options: [.byParagraphs, .substringNotRequired]) { _, range, _, _ in
+                if ctx.ns.range(of: "[", options: [], range: range).location != NSNotFound { bracketLines.append(range) }
+            }
+        }
+        for entry in incompleteLinkPatterns where !entry.anchorsToScanEnd {
+            for scan in bracketLines {
+                for m in entry.regex.matches(in: ctx.text, options: [], range: scan)
+                    where !isInCode(m.range, codeRanges) && !isInCode(m.range, checkboxRanges) {
+                    applyMatch(m.range)
+                }
             }
         }
     }

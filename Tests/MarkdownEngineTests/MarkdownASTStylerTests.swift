@@ -374,6 +374,39 @@ struct TaskCheckboxGeometryStylerTests {
         #expect(abs((revealedIndent ?? -1) - expected) < 0.01)
     }
 
+    /// `styleIncompleteLinkBrackets` narrows four of its six regex sweeps to the
+    /// lines that actually carry a `[`, skipping the many bracket-free lines a
+    /// full-document restyle scans; these cases sit far from each other so the
+    /// narrowing can't accidentally merge or skip a match.
+    @MainActor
+    @Test("incomplete-bracket styling still finds matches surrounded by bracket-free lines")
+    func incompleteLinkBracketsSurviveSparseScan() {
+        _ = NSApplication.shared
+        let filler = String(repeating: "plain paragraph with no markup at all\n\n", count: 50)
+        let text = filler
+            + "alpha[]alpha\n\n" + filler
+            + "bravo[[]]bravo\n\n" + filler
+            + "charlie[incomplete]charlie\n\n" + filler
+            + "delta[empty]()delta\n\n" + filler
+            + "golf[unclosed forever more words on the same line\n\n" + filler
+        let ns = text as NSString
+        let attrs = MarkdownASTStyler.styleAttributes(text: text, fontName: fontName, fontSize: base)
+
+        func isStyled(_ needle: String) -> Bool {
+            let range = ns.range(of: needle)
+            #expect(range.location != NSNotFound)
+            return attrs.contains { NSIntersectionRange($0.range, range).length > 0 }
+        }
+        #expect(isStyled("[]"))
+        #expect(isStyled("[[]]"))
+        #expect(isStyled("[incomplete]"))
+        #expect(isStyled("[empty]()"))
+        // A bracket that never closes and doesn't sit at the very end of the
+        // scanned text (the `$`-anchored patterns' territory) matches none of
+        // the four narrowed patterns; scanning its line must not conjure one.
+        #expect(!isStyled("[unclosed forever more words on the same line"))
+    }
+
 }
 
 /// Canonical, order-independent string of styled ranges so two style runs can be
