@@ -23,6 +23,12 @@ final class NativeTextView: NSTextView {
     var isApplyingManagedFrameSize = false
     /// Set on switch/resize to force full-layout height measurement until the cascade settles.
     var pendingFullLayoutMeasure = false
+    /// True while a staged open lays the document out in the background: the content
+    /// height is an estimate, raised to `estimatedContentHeightFloor` (extrapolated
+    /// from the part laid out so far) so the scroller and caret reveals can reach text
+    /// the background layout has not got to yet. Cleared with the exact measurement.
+    var contentHeightIsEstimated = false
+    var estimatedContentHeightFloor: CGFloat = 0
     /// Coalesces wide-table overlay updates to once per runloop (resize fires many per frame).
     var pendingWideTableOverlayUpdate = false
     var suppressAutoRevealOnce: Bool = false

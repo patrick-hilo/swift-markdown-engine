@@ -318,9 +318,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         textView.frame = NSRect(x: 0, y: 0, width: initialWidth, height: textView.frame.height)
         container.addSubview(textView)
         scrollView.documentView = container
-        // Force full-document layout at init so paragraph heights are known
-        // upfront; otherwise TextKit 2 viewport layout causes scroll drift.
-        textLayoutManager.ensureLayout(for: textLayoutManager.documentRange)
+        // No full layout of the plain text here: the first update pass replaces it
+        // with the styled document, and a large document is laid out in stages
+        // after the first frame (see `NativeTextViewCoordinator+StagedStyling`).
 
         scrollView.contentView.scroll(to: NSPoint(x: 0, y: -scrollView.contentInsets.top))
         scrollView.clampToInsets()
@@ -335,7 +335,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onInlinePreviewKey = onInlinePreviewKey
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
 
-        textView.recalcOverscroll(for: scrollView)
+        textView.recalcOverscroll(for: scrollView, debugTag: "open")
         textView.setPlaceholder(placeholder)
         // Initial reading-column centering; the resize observer below handles later changes.
         if configuration.readingWidth != nil {
@@ -383,6 +383,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
             textView.ensureVisibleLayout()
+            // Scrolling into text the staged open has not styled yet styles it now; the
+            // layout above keeps the anchoring exact, and the draw re-lays the viewport out.
+            context.coordinator.styleStagedChunksAroundViewport(of: textView)
             if context.coordinator.isWritingToolsActive {
                 context.coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
             }
@@ -636,13 +639,14 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         let font = NSFont(name: fontName, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
         textView.font = font
         textView.baseFont = font
-        // Skip on switch: textView.string still holds the OUTGOING doc here, so the "?"
-        // tag would force a full ensureLayout of the doc about to be discarded (~274ms /
-        // 7714 frags @346k). recalcOverscroll#2 after the rebuild measures the new doc;
-        // scroll is parked at top so clampToInsets below stays in range. Non-switch
-        // updates (font change, typing) must keep the forced full layout.
+        // Skip on switch: textView.string still holds the OUTGOING doc here, so a forced
+        // full ensureLayout would lay out the doc about to be discarded (~274ms /
+        // 7714 frags @346k). The rebuild below replaces the text either way, so the
+        // non-switch pass measures the estimate ("open") and recalcOverscroll#2 after
+        // the rebuild measures the new doc; scroll is parked at top so clampToInsets
+        // below stays in range.
         if !isNodeSwitch {
-            textView.recalcOverscroll(for: nsView)
+            textView.recalcOverscroll(for: nsView, debugTag: "open")
         }
         (nsView as? ClampedScrollView)?.clampToInsets()
 
@@ -650,13 +654,26 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // reads the current values from the View struct.
         context.coordinator.fontName = fontName
         context.coordinator.fontSize = fontSize
-        context.coordinator.rebuildTextStorageAndStyle(
-            textView,
-            from: text,
-            invalidateLayout: isNodeSwitch || rawSourceModeChanged
-        )
-        textView.recalcOverscroll(for: nsView)
+        // Debug-only breakdown of the open path, printed like a keystroke frame.
+        PerfTrace.begin(docLength: (text as NSString).length)
+        PerfTrace.note { "rebuild: switch=\(isNodeSwitch) font=\(fontChanged) raw=\(rawSourceModeChanged) initial=\(!context.coordinator.didInitialFormatting) textDiffers=\(context.coordinator.lastSyncedText != text)" }
+        PerfTrace.measure("rebuild") {
+            context.coordinator.rebuildTextStorageAndStyle(
+                textView,
+                from: text,
+                invalidateLayout: isNodeSwitch || rawSourceModeChanged
+            )
+        }
+        // A staged open shows the first frame at TextKit's estimated height; the
+        // background turns measure the exact height once the document is laid out.
+        PerfTrace.measure("overscroll") {
+            textView.recalcOverscroll(
+                for: nsView,
+                debugTag: context.coordinator.stagedStylingActive ? "open" : "?"
+            )
+        }
         (nsView as? ClampedScrollView)?.clampToInsets()
+        PerfTrace.end()
         // Height is measured now, so restore the saved offset; clampToInsets keeps
         // it in range if the document got shorter. Latched rather than gated on
         // `isNodeSwitch`, because a remount is not a switch and its first pass still
@@ -665,6 +682,13 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.pendingScrollRestoreAttempts -= 1
             let saved = restoreScrollOffset?(documentId) ?? context.coordinator.scrollOffsets[documentId]
             if let savedY = saved {
+                // A remembered offset means a place in the exact document, not in the
+                // estimate a staged open shows first: style the rest now and measure.
+                if context.coordinator.stagedStylingActive, savedY > -nsView.contentInsets.top + 0.5 {
+                    context.coordinator.drainStagedStyling(textView)
+                    textView.pendingFullLayoutMeasure = true
+                    textView.recalcOverscroll(for: nsView, debugTag: "restore")
+                }
                 nsView.contentView.scroll(to: NSPoint(x: nsView.contentView.bounds.origin.x, y: savedY))
                 nsView.reflectScrolledClipView(nsView.contentView)
                 (nsView as? ClampedScrollView)?.clampToInsets()

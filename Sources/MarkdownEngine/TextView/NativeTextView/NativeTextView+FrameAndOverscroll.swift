@@ -27,6 +27,10 @@ extension NativeTextView {
         let lineHeight = layoutBridgeDefaultLineHeight(for: self.baseFont, using: layoutBridge)
         // File switch/resize forces full layout until height settles; typing stays O(edit).
         if debugTag == "?" { pendingFullLayoutMeasure = true }
+        // The open path measures TextKit's estimate: the text there is either about to
+        // be replaced by the styled document or is being styled and laid out in stages
+        // after the first frame, and the staged finish measures the exact height.
+        if debugTag == "open" { pendingFullLayoutMeasure = false }
         let forcedFullLayout = pendingFullLayoutMeasure
         let measured = measuredBaseContentHeight(
             minimumHeight: lineHeight,
@@ -110,6 +114,22 @@ extension NativeTextView {
               let to = content.location(layoutManager.documentRange.location, offsetBy: end),
               let textRange = NSTextRange(location: from, end: to) else { return }
         layoutManager.ensureLayout(for: textRange)
+    }
+
+    /// Lays out `start ..< end` by walking the fragments with `.ensuresLayout`. Unlike
+    /// `ensureLayout(for:)`, the walk re-lays out fragments an attribute change
+    /// invalidated, so their heights are fresh afterwards; the cached frames below them
+    /// move only when TextKit draws. A staged open depends on the fresh heights for its
+    /// anchoring and its sequential layout.
+    func layOutFragments(from start: Int, to end: Int) {
+        guard end > start, let layoutManager = textLayoutManager,
+              let content = layoutManager.textContentManager else { return }
+        let length = (string as NSString).length
+        guard let from = content.location(layoutManager.documentRange.location, offsetBy: min(start, length)),
+              let to = content.location(layoutManager.documentRange.location, offsetBy: min(end, length)) else { return }
+        layoutManager.enumerateTextLayoutFragments(from: from, options: [.ensuresLayout]) { fragment in
+            fragment.rangeInElement.location.compare(to) == .orderedAscending
+        }
     }
 
     func measuredBaseContentHeight(minimumHeight: CGFloat, forceFullLayout: Bool = false) -> CGFloat {
@@ -202,7 +222,28 @@ extension NativeTextView {
             }
         }
 
-        return max(ceil(rawHeight + (textContainerInset.height * 2)), minimumContentHeight)
+        let measured = max(ceil(rawHeight + (textContainerInset.height * 2)), minimumContentHeight)
+        guard contentHeightIsEstimated, !forceFullLayout else { return measured }
+        return max(measured, estimatedContentHeightFloor)
+    }
+
+    /// Extrapolates the document height from the text laid out so far (`0 ..< end`)
+    /// and adopts it as the floor of the estimated height. TextKit's own estimate for
+    /// text it has not laid out is far below the styled height, and a scroll past it
+    /// is cut off at the frame.
+    func raiseEstimatedContentHeight(laidOutThrough end: Int, for scrollView: NSScrollView) {
+        guard contentHeightIsEstimated, end > 0,
+              let layoutManager = textLayoutManager,
+              let content = layoutManager.textContentManager else { return }
+        let length = (string as NSString).length
+        guard end < length,
+              let location = content.location(layoutManager.documentRange.location, offsetBy: end - 1),
+              let fragment = layoutManager.textLayoutFragment(for: location) else { return }
+        let laidOut = fragment.layoutFragmentFrame.maxY
+        let extrapolated = ceil(laidOut * CGFloat(length) / CGFloat(end) + textContainerInset.height * 2)
+        guard extrapolated > estimatedContentHeightFloor + 0.5 else { return }
+        estimatedContentHeightFloor = extrapolated
+        recalcOverscroll(for: scrollView, debugTag: "estimate")
     }
 
     /// Fixed reading-column width = wrap width + horizontal insets on both sides.
@@ -377,6 +418,15 @@ extension NativeTextView {
             super.scrollRangeToVisible(range)
             return
         }
+        if contentHeightIsEstimated {
+            // A staged open has not laid the document out yet. The enumeration below
+            // reads the caret's position once, and a settle inside it does not refresh
+            // that reading, so lay out up to the caret first; and grow the frame to the
+            // extrapolated height, or the scroll is cut off at the estimate.
+            let upToCaret = min(range.location + 1, docLength)
+            PerfTrace.accumulate("revealSettle") { layOutFragments(from: 0, to: upToCaret) }
+            raiseEstimatedContentHeight(laidOutThrough: upToCaret, for: scrollView)
+        }
         tlm.enumerateTextLayoutFragments(from: start, options: [.ensuresLayout]) { fragment in
             let cv = scrollView.contentView
             let insetsTop = scrollView.contentInsets.top
@@ -432,6 +482,7 @@ extension NativeTextView {
             } else {
                 return false   // already visible (or a spurious verdict, corrected)
             }
+            PerfTrace.stamp("reveal", 0, "target=\(Int(targetY)) caretY=\(Int(frame.minY)) frameH=\(Int(self.frame.height)) estimated=\(contentHeightIsEstimated)")
             (scrollView as? ClampedScrollView)?.cancelPendingScrollRestore()
             cv.scroll(to: NSPoint(x: cv.bounds.origin.x, y: targetY))
             scrollView.reflectScrolledClipView(cv)

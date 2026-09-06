@@ -273,6 +273,15 @@ extension NativeTextViewCoordinator {
         if codeBlockStructureChanged || extFenceStructureChanged {
             effectiveParagraphCandidates = [NSRange(location: 0, length: fullText.length)]
         }
+        // Chunks a staged open still has to style move with this edit.
+        shiftStagedStyling(
+            editedRange: editedRange,
+            delta: lengthDelta,
+            trusted: singleTrackedEdit,
+            blocks: parsed.blocks,
+            length: fullLength,
+            wholeDocumentRestyled: codeBlockStructureChanged || extFenceStructureChanged
+        )
         // Restyle only latex/imageEmbed paragraphs the EDIT touches (mirrors the
         // table loop below); the caret entering/leaving a formula, which flips
         // rendered↔raw, is covered by tokenRestyleParagraphs. Blanket-restyling

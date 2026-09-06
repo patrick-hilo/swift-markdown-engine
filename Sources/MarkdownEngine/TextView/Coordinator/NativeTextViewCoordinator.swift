@@ -94,6 +94,19 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     /// so that re-entrant pass is pure waste (measured 71ms on a 346k note). Mirrors
     /// the `didEnsureLayoutForCurrentDocument` suppression pattern.
     var isRebuildingDocument = false
+    /// Staged open of a large document (see `NativeTextViewCoordinator+StagedStyling`):
+    /// the ranges still carrying base attributes only, styled in document order over
+    /// later runloop turns; `stagedLayoutEnd` is how far the sequential layout has
+    /// reached. `stagedStylingActive` stays true until the final exact height
+    /// measurement, so the open path knows to measure an estimate meanwhile.
+    var stagedStylingPending: [NSRange] = []
+    var stagedStylingActive = false
+    var stagedLayoutEnd = 0
+    /// Bumped by every rebuild so a pump scheduled for the previous document stops.
+    var stagedStylingGeneration: UInt64 = 0
+    /// True while a staged turn re-scrolls to keep the viewport anchored; the scroll
+    /// observer must not pull chunks from inside that adjustment.
+    var isKeepingViewportAnchor = false
     var lastSyncedText: String
     var isProgrammaticEdit: Bool = false
     var isWritingToolsActive: Bool = false

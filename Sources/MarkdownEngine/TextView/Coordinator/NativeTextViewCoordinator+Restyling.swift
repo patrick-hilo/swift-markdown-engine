@@ -25,6 +25,8 @@ extension NativeTextViewCoordinator {
         // at the end of this method.
         isRebuildingDocument = true
         defer { isRebuildingDocument = false }
+        // Chunks queued for the previous document would style the wrong text.
+        cancelStagedStyling()
         (textView as? NativeTextView)?.lastStyledAppearanceName = textView.effectiveAppearance.name
         // A rebuild means a different document (or a mode flip): drop the caret
         // ink resolved for the old one instead of carrying it into this text.
@@ -38,7 +40,9 @@ extension NativeTextViewCoordinator {
             displayText = text
             wikiLinkMetadata = [:]
         } else {
-            let displayState = WikiLinkService.makeDisplayState(from: text) { services.wikiLinks.name(forID: $0) }
+            let displayState = PerfTrace.measure("wikiDisplay") {
+                WikiLinkService.makeDisplayState(from: text) { services.wikiLinks.name(forID: $0) }
+            }
             displayText = displayState.display
             wikiLinkMetadata = displayState.metadata
         }
@@ -49,9 +53,11 @@ extension NativeTextViewCoordinator {
         // the ensureLayout below rebuilds from scratch anyway. This rebuild's own
         // ensureLayout IS that one-shot per-document layout.
         didEnsureLayoutForCurrentDocument = true
-        if textView.string != displayText {
-            textView.string = displayText
-            parseGeneration &+= 1
+        PerfTrace.measure("setString") {
+            if textView.string != displayText {
+                textView.string = displayText
+                parseGeneration &+= 1
+            }
         }
         lastSyncedText = text
         lastComputedStorage = text
@@ -63,7 +69,7 @@ extension NativeTextViewCoordinator {
         parseState.invalidate()
         pendingBacktickWindow = nil
         backtickCensusNeedsRescan = false
-        previousBacktickCount = MarkdownDetection.tripleBacktickCount(in: nsDisplay)
+        previousBacktickCount = PerfTrace.measure("backtick") { MarkdownDetection.tripleBacktickCount(in: nsDisplay) }
         let fullRange = NSRange(location: 0, length: nsDisplay.length)
 
         let (baseFont, paragraph) = TextStylingService.makeBaseFontAndStyle(
@@ -89,11 +95,14 @@ extension NativeTextViewCoordinator {
 
         // Kept for the end-of-rebuild selection replay (see below); raw mode leaves it nil.
         var parsedForReplay: ParsedDocument?
+        // A large document styles only its head here; the rest follows in background
+        // chunks (see `NativeTextViewCoordinator+StagedStyling`).
+        var stagedPlan: StagedStylingPlan?
         if rawMode {
             // Base attributes only — the source stays verbatim and unstyled.
             activeTokenIndices = []
         } else {
-            let parsed = parsedDocument(for: displayText)
+            let parsed = PerfTrace.measure("parse") { parsedDocument(for: displayText) }
             parsedForReplay = parsed
             let tokens = parsed.tokens
             // Hide caret from styling when read-only, else clicks reveal raw token syntax.
@@ -104,8 +113,9 @@ extension NativeTextViewCoordinator {
                 in: nsDisplay,
                 suppressed: !textView.isEditable
             )
+            stagedPlan = Self.stagedStylingPlan(blocks: parsed.blocks, length: nsDisplay.length)
 
-            let ranges = MarkdownStyler.styleAttributes(
+            let ranges = PerfTrace.measure("style") { MarkdownStyler.styleAttributes(
                 text: displayText,
                 fontName: fontName,
                 fontSize: fontSize,
@@ -125,10 +135,11 @@ extension NativeTextViewCoordinator {
                 // Same parse the tokens came from; without it the styler ran the
                 // block parser a SECOND time over the whole document per open.
                 precomputedBlocks: parsed.blocks,
+                // scoped=nil styles every token in the document; a staged open
+                // scopes the head and leaves the rest to the background chunks.
+                scopedRanges: stagedPlan.map { [$0.initial] },
                 configuration: configuration
-            )
-            // scoped=nil is the point: the rebuild passes no scopedRanges, so
-            // every token in the document is styled.
+            ) }
 
             // ROOT CAUSE (proven by a CPU sample of the 12.5–16s first-open hang):
             // per-key `addAttribute` creates a short-lived intermediate dict on every
@@ -140,18 +151,35 @@ extension NativeTextViewCoordinator {
             // ops). Coalescing to non-overlapping runs and writing each with ONE
             // `setAttributes` interns exactly one LIVE dict per run — no intermediates, no
             // tombstones, no rehash thrash. First open dropped from 16s to tens of ms.
-            let runs = MarkdownStyler.flattenedRuns(ranges, base: baseAttrs,
-                                                    documentLength: fullRange.length)
-            for (range, attrs) in runs {
-                built.setAttributes(attrs, range: range)
+            PerfTrace.measure("runs") {
+                let runs = MarkdownStyler.flattenedRuns(ranges, base: baseAttrs,
+                                                        documentLength: fullRange.length)
+                for (range, attrs) in runs {
+                    built.setAttributes(attrs, range: range)
+                }
+            }
+            // The styler writes `.wikiLinkID` only for the head; the tail gets it from
+            // the metadata now, because a storage rebuild that falls back to the
+            // attribute (an edit next to a link, undo) would otherwise drop the ids of
+            // every link the background chunks have not reached.
+            if let stagedPlan {
+                let head = NSMaxRange(stagedPlan.initial)
+                for (key, metadata) in wikiLinkMetadata where key.location >= head {
+                    guard let id = metadata.id, key.location + key.length <= fullRange.length else { continue }
+                    let openLength = nsDisplay.character(at: key.location) == 0x21 ? 3 : 2   // "![[" or "[["
+                    let content = NSRange(location: key.location + openLength, length: key.length - openLength - 2)
+                    if content.length > 0 { built.addAttribute(.wikiLinkID, value: id, range: content) }
+                }
             }
         }
 
         // ONE live-storage mutation carries the whole styled document across. This is the
         // only edit that touches the layout-connected storage.
-        textView.textStorage?.beginEditing()
-        textView.textStorage?.setAttributedString(built)
-        textView.textStorage?.endEditing()
+        PerfTrace.measure("transfer") {
+            textView.textStorage?.beginEditing()
+            textView.textStorage?.setAttributedString(built)
+            textView.textStorage?.endEditing()
+        }
 
 
         textView.typingAttributes = TextStylingService.makeBaseTypingAttributes(
@@ -164,7 +192,14 @@ extension NativeTextViewCoordinator {
             if invalidateLayout {
                 tlm.invalidateLayout(for: tlm.documentRange)
             }
-            tlm.ensureLayout(for: tlm.documentRange)
+            // A staged open lays the document out chunk by chunk after the first
+            // frame instead; TextKit lays the viewport out for drawing on its own.
+            if stagedPlan == nil {
+                PerfTrace.measure("fullLayout") { tlm.ensureLayout(for: tlm.documentRange) }
+            }
+        }
+        if let stagedPlan {
+            beginStagedStyling(stagedPlan)
         }
 
         // The re-entrant textViewDidChangeSelection was suppressed for this rebuild
