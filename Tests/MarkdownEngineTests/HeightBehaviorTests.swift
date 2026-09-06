@@ -812,3 +812,53 @@ struct FullRuntimeReconfigurationTests {
         #expect(stack.container.scrollableContentHeight == scrollsTotal)
     }
 }
+
+// MARK: - Reading width at runtime
+
+/// `updateNSView` synced height behavior, scrollers, insets and services with the live
+/// text view but not `readingWidth`, so an embedder that changed its reading column had
+/// to rebuild the editor — losing the scroll position and re-laying out the document.
+@MainActor
+@Suite("Reading width at runtime")
+struct ReadingWidthRuntimeTests {
+
+    private func clipWidth(_ stack: HeightBehaviorStack) -> CGFloat {
+        stack.scrollView.contentView.bounds.width
+    }
+
+    @Test func changingTheReadingWidthRewrapsAndRecentersTheColumn() {
+        let stack = HeightBehaviorStack(viewport: NSSize(width: 1200, height: 800))
+        let clip = clipWidth(stack)
+
+        stack.textView.applyReadingWidth(600)
+        #expect(stack.textView.textContainer?.widthTracksTextView == false)
+        #expect(stack.textView.textContainer?.size.width == 600)
+        #expect(abs(stack.textView.frame.width - 600) < 0.5)
+        #expect(abs(stack.textView.frame.origin.x - floor((clip - 600) / 2)) < 1)
+
+        stack.textView.applyReadingWidth(900)
+        #expect(stack.textView.textContainer?.size.width == 900)
+        #expect(abs(stack.textView.frame.width - 900) < 0.5)
+        #expect(abs(stack.textView.frame.origin.x - floor((clip - 900) / 2)) < 1)
+    }
+
+    @Test func clearingTheReadingWidthReturnsToTheFullWidth() {
+        let stack = HeightBehaviorStack(viewport: NSSize(width: 1200, height: 800))
+        stack.textView.applyReadingWidth(600)
+
+        stack.textView.applyReadingWidth(nil)
+        #expect(stack.textView.configuration.readingWidth == nil)
+        #expect(stack.textView.textContainer?.widthTracksTextView == true)
+        #expect(abs(stack.textView.frame.width - clipWidth(stack)) < 0.5)
+        #expect(abs(stack.textView.frame.origin.x) < 1)
+    }
+
+    @Test func applyingTheSameReadingWidthTwiceIsStable() {
+        let stack = HeightBehaviorStack(viewport: NSSize(width: 1200, height: 800))
+        stack.textView.applyReadingWidth(700)
+        let frame = stack.textView.frame
+
+        stack.textView.applyReadingWidth(700)
+        #expect(stack.textView.frame == frame)
+    }
+}

@@ -533,6 +533,14 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             || abs(textView.textContainerInset.height - desiredTextInset.height) > 0.5 {
             textView.textContainerInset = desiredTextInset
         }
+        // Sync the reading column. Everything else here was synced already; a changed
+        // readingWidth used to need an editor rebuild, which cost the scroll position.
+        if textView.configuration.readingWidth != configuration.readingWidth {
+            textView.applyReadingWidth(configuration.readingWidth)
+            context.coordinator.configuration.readingWidth = configuration.readingWidth
+            textView.recalcOverscroll(for: nsView)
+            (nsView as? ClampedScrollView)?.clampToInsets()
+        }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the

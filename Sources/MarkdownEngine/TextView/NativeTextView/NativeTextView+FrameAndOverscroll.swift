@@ -231,6 +231,29 @@ extension NativeTextView {
     }
 
     /// Re-center the column by moving its X (not resizing it) so it stays smooth during live resize.
+    /// Adopt a reading width on a live text view: re-fix the wrap width, resize the
+    /// column and re-center it. Without this an embedder that changes its reading
+    /// column has to rebuild the editor, which costs the scroll position and a full
+    /// re-layout of the document.
+    func applyReadingWidth(_ width: CGFloat?) {
+        guard configuration.readingWidth != width else { return }
+        configuration.readingWidth = width
+        let clipWidth = enclosingScrollView?.contentView.bounds.width
+            ?? superview?.bounds.width ?? frame.width
+        if let width, let container = textContainer {
+            container.widthTracksTextView = false
+            container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
+        } else if let container = textContainer {
+            container.widthTracksTextView = true
+        }
+        applyManagedFrameSize(width: clipWidth)
+        if width != nil {
+            centerReadingColumn(forClipWidth: clipWidth)
+        } else if abs(frame.origin.x) > 0.5 {
+            setFrameOrigin(NSPoint(x: 0, y: frame.origin.y))
+        }
+    }
+
     func centerReadingColumn(forClipWidth clipWidth: CGFloat) {
         guard configuration.readingWidth != nil,
               let container = superview as? NativeTextViewContainer else { return }
