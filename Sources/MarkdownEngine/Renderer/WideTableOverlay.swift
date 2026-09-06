@@ -251,11 +251,18 @@ extension NativeTextView {
         }
 
         // Settle layout before measuring — stale fragments would yield wrong anchor Ys.
+        // Not during a staged open: its background turns lay the document out in
+        // order and every chunk restyle schedules this update, so forcing the full
+        // layout here laid a 441-kB document out a dozen times (40 % of the CPU of the
+        // open). Tables in the laid-out head measure exactly, the rest settles with the
+        // update that follows the last turn.
         let overlayT0 = DispatchTime.now().uptimeNanoseconds
-        tlm.ensureLayout(for: tlm.documentRange)
+        if !contentHeightIsEstimated {
+            tlm.ensureLayout(for: tlm.documentRange)
+        }
         PerfTrace.stamp("wideTableOverlay.ensureLayout(fullDoc)",
                         Double(DispatchTime.now().uptimeNanoseconds - overlayT0) / 1_000_000,
-                        "docLen=\(storage.length)")
+                        "docLen=\(storage.length) staged=\(contentHeightIsEstimated)")
 
         storage.enumerateAttribute(.scrollableBlockSourceID, in: fullRange, options: []) { value, attrRange, _ in
             guard let sourceID = value as? Int,
