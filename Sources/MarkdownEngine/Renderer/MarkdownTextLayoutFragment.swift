@@ -15,6 +15,10 @@ import CoreText
 
 extension NSAttributedString.Key {
     static let latexImage = NSAttributedString.Key("LatexRenderedImage")
+    /// `TableLayout` — a measured table the fragment draws as text. Sits on the
+    /// same anchor character `.latexImage` would, and is mutually exclusive
+    /// with it: the two are the raster and the text form of one visual.
+    static let tableLayout = NSAttributedString.Key("TableMeasuredLayout")
     static let latexBounds = NSAttributedString.Key("LatexImageBounds")
     static let latexIsBlock = NSAttributedString.Key("LatexIsBlock")
     static let latexBlockOffsetY = NSAttributedString.Key("LatexBlockOffsetY")
@@ -433,19 +437,24 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     private func blockImageRects(at point: CGPoint) -> [CGRect] {
         guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
         var rects: [CGRect] = []
-        ts.enumerateAttribute(.latexImage, in: range, options: []) { value, attrRange, _ in
-            guard value is NSImage else { return }
-            let isBlock = ts.attribute(.latexIsBlock, at: attrRange.location, effectiveRange: nil) as? Bool ?? false
-            guard isBlock else { return }
-            // Skip overlay blocks; surface bounds must stay within container.
-            if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
-                return
-            }
-            let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
-            let imageBounds = boundsVal?.rectValue ?? .zero
-            let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
-            if let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) {
-                rects.append(rect)
+        // An anchor carries a bitmap or a measured layout, never both, so the
+        // two walks cannot report the same block twice.
+        for key in [NSAttributedString.Key.latexImage, .tableLayout] {
+            ts.enumerateAttribute(key, in: range, options: []) { value, attrRange, _ in
+                let isVisual = key == .latexImage ? value is NSImage : value is TableLayout
+                guard isVisual else { return }
+                let isBlock = ts.attribute(.latexIsBlock, at: attrRange.location, effectiveRange: nil) as? Bool ?? false
+                guard isBlock else { return }
+                // Skip overlay blocks; surface bounds must stay within container.
+                if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
+                    return
+                }
+                let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
+                let imageBounds = boundsVal?.rectValue ?? .zero
+                let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
+                if let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) {
+                    rects.append(rect)
+                }
             }
         }
         return rects
@@ -487,6 +496,37 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                                   width: imageBounds.width, height: imageBounds.height)
             }
             image.draw(in: drawRect)
+        }
+
+        drawTableLayouts(in: ts, range: range, at: point)
+    }
+
+    /// Draws every measured table in this fragment as text.
+    ///
+    /// The geometry is exactly `drawLatexImages`': the anchor character carries
+    /// `.latexBounds`, so a table occupies the same rect whether it is drawn
+    /// from a bitmap or from its layout. Nothing is cached per pixel — the
+    /// cells are laid out from their attributed strings on every draw, which is
+    /// what keeps a document's table memory proportional to its text.
+    private func drawTableLayouts(in ts: NSTextStorage, range: NSRange, at point: CGPoint) {
+        ts.enumerateAttribute(.tableLayout, in: range, options: []) { [weak self] value, attrRange, _ in
+            guard let self, let layout = value as? TableLayout else { return }
+
+            // Skip overlay-rendered blocks; WideTableOverlay owns the visual.
+            if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
+                return
+            }
+
+            let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
+            let imageBounds = boundsVal?.rectValue ?? CGRect(origin: .zero, size: layout.size)
+            let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
+            guard let drawRect = blockImageDrawRect(
+                attrRange: attrRange,
+                imageBounds: imageBounds,
+                blockOffsetY: blockOffsetY,
+                point: point
+            ) else { return }
+            layout.draw(at: drawRect.origin)
         }
     }
 

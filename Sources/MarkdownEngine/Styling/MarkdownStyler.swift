@@ -53,6 +53,15 @@ extension MarkdownStyler {
         /// Pre-classified per-kind token arrays; nil for direct callers (tests),
         /// which fall back to classifying `tokens` on demand.
         var classified: ClassifiedStyleTokens? = nil
+        /// Draw tables as text from a measured `TableLayout` instead of
+        /// rasterizing them into a cached bitmap.
+        ///
+        /// Per context rather than process-global: a test that needs the old
+        /// path must not change what another test measures, and the styler
+        /// already runs off the main thread. The default comes from the
+        /// environment so a comparison build can be measured without a code
+        /// change; nothing writes it at runtime.
+        var drawsTablesAsText: Bool = MarkdownStyler.drawsTablesAsTextByDefault
 
         var services: MarkdownEditorServices { configuration.services }
 
@@ -293,8 +302,9 @@ extension MarkdownStyler {
     static func appendRenderedStandaloneBlock(
         for token: MarkdownToken,
         rawContent: String,
-        image: NSImage,
+        image: NSImage?,
         imageBounds: CGRect,
+        tableLayout: TableLayout? = nil,
         paragraphSpacingBefore: CGFloat,
         paragraphSpacing: CGFloat,
         alignment: NSTextAlignment,
@@ -320,6 +330,7 @@ extension MarkdownStyler {
                 rawContent: rawContent,
                 image: image,
                 imageBounds: imageBounds,
+                tableLayout: tableLayout,
                 paragraphSpacing: paragraphSpacing,
                 para: para,
                 paraRange: paraRange,
@@ -343,6 +354,7 @@ extension MarkdownStyler {
                 rawContent: rawContent,
                 image: image,
                 imageBounds: imageBounds,
+                tableLayout: tableLayout,
                 paragraphSpacing: paragraphSpacing,
                 para: para,
                 paraRange: paraRange,
@@ -360,12 +372,16 @@ extension MarkdownStyler {
             para.paragraphSpacing = max(para.paragraphSpacing, imageBounds.height + imageGap + paragraphSpacing)
 
             attrs.append((paraRange, [.paragraphStyle: para]))
-            attrs.append((token.range, [
-                .latexImage: image,
-                .latexBounds: NSValue(rect: imageBounds),
-                .latexIsBlock: true,
-                .latexBlockOffsetY: baseLineHeight + imageGap
-            ]))
+            // `.visibleSource` is the image-embed path; it never carries a
+            // table layout, so an absent image means there is nothing to plant.
+            if let image {
+                attrs.append((token.range, [
+                    .latexImage: image,
+                    .latexBounds: NSValue(rect: imageBounds),
+                    .latexIsBlock: true,
+                    .latexBlockOffsetY: baseLineHeight + imageGap
+                ]))
+            }
             appendSecondaryMarkers(for: token, to: &attrs, theme: ctx.configuration.theme)
         }
 
@@ -390,8 +406,9 @@ extension MarkdownStyler {
     private static func emitCollapsedAttrs(
         token: MarkdownToken,
         rawContent: String,
-        image: NSImage,
+        image: NSImage?,
         imageBounds: CGRect,
+        tableLayout: TableLayout?,
         paragraphSpacing: CGFloat,
         para: NSMutableParagraphStyle,
         paraRange: NSRange,
@@ -444,13 +461,17 @@ extension MarkdownStyler {
         let anchorRange = NSRange(location: anchorLocation, length: 1)
         let anchorChar = ctx.nsText.substring(with: anchorRange)
         var anchorAttrs: [NSAttributedString.Key: Any] = [
-            .latexImage: image,
             .latexBounds: NSValue(rect: imageBounds),
             .latexIsBlock: true,
             .foregroundColor: NSColor.clear,
             .font: ctx.latexMarkerFont,
             .kern: advanceWidth - HeadingHelpers.textWidth(anchorChar, font: ctx.latexMarkerFont)
         ]
+        // Exactly one visual per anchor: a rasterized image (LaTeX, embeds, and
+        // tables while the bitmap path is switched on) or a measured table
+        // layout the fragment draws as text.
+        if let image { anchorAttrs[.latexImage] = image }
+        if let tableLayout { anchorAttrs[.tableLayout] = tableLayout }
         for (key, value) in extraAnchorAttrs { anchorAttrs[key] = value }
         attrs.append((anchorRange, anchorAttrs))
 
