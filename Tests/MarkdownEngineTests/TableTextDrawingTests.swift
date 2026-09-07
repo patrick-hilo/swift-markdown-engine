@@ -292,11 +292,15 @@ struct TableTextDrawingTests {
 
     // MARK: - Cache
 
+    // The layout cache is process-wide and these tests run in parallel with
+    // every other suite, so none of them may clear it — a sibling would lose
+    // its entry between two lookups. Each test uses a source string no other
+    // test uses instead, which isolates its entries by key.
+
     @Test func secondMeasurementIsServedFromCache() throws {
-        let source = "| cached | table |\n|---|---|\n| 1 | 2 |"
+        let source = "| cached-second-request | table |\n|---|---|\n| 1 | 2 |"
         let parsed = try #require(MarkdownStyler.parseTableSource(source))
         let ctx = makeContext(for: source)
-        MarkdownStyler.tableLayoutCache.removeAllObjects()
         let first = MarkdownStyler.tableLayout(for: source, parsed: parsed, ctx: ctx, availableWidth: 1234)
         let second = MarkdownStyler.tableLayout(for: source, parsed: parsed, ctx: ctx, availableWidth: 1234)
         #expect(first.measured)
@@ -307,10 +311,9 @@ struct TableTextDrawingTests {
     /// A width change must evict the previous width's entry, or a live resize
     /// leaves one layout per intermediate width behind.
     @Test func aNewWidthEvictsThePreviousWidthsLayout() throws {
-        let source = "| evicting | table |\n|---|---|\n| 1 | 2 |"
+        let source = "| cached-width-eviction | table |\n|---|---|\n| 1 | 2 |"
         let parsed = try #require(MarkdownStyler.parseTableSource(source))
         let ctx = makeContext(for: source)
-        MarkdownStyler.tableLayoutCache.removeAllObjects()
         _ = MarkdownStyler.tableLayout(for: source, parsed: parsed, ctx: ctx, availableWidth: 2000)
         _ = MarkdownStyler.tableLayout(for: source, parsed: parsed, ctx: ctx, availableWidth: 1500)
         let backAtOldWidth = MarkdownStyler.tableLayout(for: source, parsed: parsed, ctx: ctx, availableWidth: 2000)
@@ -405,12 +408,11 @@ struct TableTextDrawingTests {
     /// for such a table. Switching appearance must re-measure it, or the
     /// formula keeps light-mode ink on a dark table.
     @Test func aTableWithLatexIsReMeasuredForTheOtherAppearance() throws {
-        let source = "| formula | b |\n|---|---|\n| $x^2$ | 2 |"
+        let source = "| cached-latex-appearance | b |\n|---|---|\n| $x^2$ | 2 |"
         let parsed = try #require(MarkdownStyler.parseTableSource(source))
         let ctx = latexContext(source)
         let aqua = try #require(NSAppearance(named: .aqua))
         let dark = try #require(NSAppearance(named: .darkAqua))
-        MarkdownStyler.tableLayoutCache.removeAllObjects()
 
         var light: (layout: TableLayout, measured: Bool)?
         var night: (layout: TableLayout, measured: Bool)?
@@ -428,12 +430,11 @@ struct TableTextDrawingTests {
     /// …and a table WITHOUT LaTeX must still be reused across appearances,
     /// which is what makes a dark-mode switch free for ordinary tables.
     @Test func aTableWithoutLatexIsSharedAcrossAppearances() throws {
-        let source = "| plain | b |\n|---|---|\n| one | 2 |"
+        let source = "| cached-appearance-shared | b |\n|---|---|\n| one | 2 |"
         let parsed = try #require(MarkdownStyler.parseTableSource(source))
         let ctx = latexContext(source)
         let aqua = try #require(NSAppearance(named: .aqua))
         let dark = try #require(NSAppearance(named: .darkAqua))
-        MarkdownStyler.tableLayoutCache.removeAllObjects()
 
         var night: (layout: TableLayout, measured: Bool)?
         aqua.performAsCurrentDrawingAppearance {
@@ -450,9 +451,8 @@ struct TableTextDrawingTests {
     /// theme's text. Keyed on resolved components, not instance identity —
     /// NSColor addresses get reused.
     @Test func themesDifferingOnlyInAColourDoNotShareALayout() throws {
-        let source = "| themed | b |\n|---|---|\n| one | 2 |"
+        let source = "| cached-theme-collision | b |\n|---|---|\n| one | 2 |"
         let parsed = try #require(MarkdownStyler.parseTableSource(source))
-        MarkdownStyler.tableLayoutCache.removeAllObjects()
 
         var first = MarkdownEditorConfiguration.default
         first.theme.bodyText = NSColor(srgbRed: 0.10, green: 0.20, blue: 0.30, alpha: 1)
