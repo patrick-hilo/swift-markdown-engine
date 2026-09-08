@@ -29,8 +29,6 @@ final class NativeTextView: NSTextView {
     /// the background layout has not got to yet. Cleared with the exact measurement.
     var contentHeightIsEstimated = false
     var estimatedContentHeightFloor: CGFloat = 0
-    /// Coalesces wide-table overlay updates to once per runloop (resize fires many per frame).
-    var pendingWideTableOverlayUpdate = false
     var suppressAutoRevealOnce: Bool = false
     // Set by clickedOnLink during a mouseDown: did the delegate fire (so
     // mouseDown can re-dispatch a click AppKit dropped), and did it navigate
@@ -74,11 +72,20 @@ final class NativeTextView: NSTextView {
     /// Return `true` to show the arrow cursor instead of the edit-mode I-beam.
     var isCursorExcluded: ((CGPoint) -> Bool)?
 
-    // MARK: Wide-table overlay state
-    /// Live NSScrollView per wide table; keyed by source-ID hash.
-    var wideTableOverlays: [Int: WideTableOverlay] = [:]
-    /// Persisted horizontal scroll offset per wide table; survives restyles.
+    // MARK: Wide-table scrolling
+    /// Horizontal scroll offset per wide table, keyed by source-ID hash.
+    ///
+    /// The one piece of table state the text view owns: a restyle rebuilds the
+    /// layout and its anchor, and the offset has to outlive that so a table the
+    /// reader scrolled sideways does not jump back on the next keystroke.
     var tableHorizontalScrollOffsets: [Int: CGFloat] = [:]
+    /// Coalesces the table re-measurement a reading-width change needs.
+    var pendingTableWidthRestyle = false
+    /// A reading-width change arrived during a live resize; the pass runs once
+    /// the drag settles.
+    var needsTableWidthRestyleAfterResize = false
+    /// What the scroll gesture in flight is moving; see `scrollWheel`.
+    var wideTableScrollGesture: WideTableScrollGesture?
 
     /// Appearance the document was last styled under. SwiftUI hosting re-applies the
     /// window's appearance to the view right after it was created, which fires this

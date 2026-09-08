@@ -23,11 +23,10 @@ extension NativeTextView {
             // on every move, so setting the arrow after it flickers — skip
             // super entirely, like the exclusion-zone branch.
             NSCursor.arrow.set()
-        } else if isEditable, isOverWideTableOverlay(event) {
-            // Same treatment for wide-table scroll overlays: the overlay is a
-            // control surface (rendered image + horizontal scroller), not
-            // text, but the text view's tracking areas are not occlusion-aware
-            // and super keeps setting the I-beam through it.
+        } else if isEditable, isOverWideTableScroller(event) {
+            // Same treatment for a wide table's scroller strip: it is a control
+            // surface, not text, and super sets the I-beam over everything the
+            // text view covers.
             NSCursor.arrow.set()
         } else {
             super.mouseMoved(with: event)
@@ -41,7 +40,7 @@ extension NativeTextView {
             if isEditable { NSCursor.arrow.set() }
         } else if isEditable, isOverTaskCheckboxBox(event) {
             NSCursor.arrow.set()
-        } else if isEditable, isOverWideTableOverlay(event) {
+        } else if isEditable, isOverWideTableScroller(event) {
             NSCursor.arrow.set()
         } else {
             super.mouseEntered(with: event)
@@ -50,19 +49,14 @@ extension NativeTextView {
         }
     }
 
-    /// True when the pointer is over a wide-table overlay's HORIZONTAL
-    /// SCROLLER (mirrors the task-checkbox suppression above; read-only mode
-    /// already shows the arrow via `applyReadOnlyCursor`). Only the scroller
-    /// strip is a control surface — over the rendered table image itself the
-    /// normal text cursor behavior stays.
-    private func isOverWideTableOverlay(_ event: NSEvent) -> Bool {
-        guard !wideTableOverlays.isEmpty else { return false }
-        for (_, overlay) in wideTableOverlays where overlay.superview != nil && !overlay.isHidden {
-            guard let scroller = overlay.horizontalScroller, !scroller.isHidden else { continue }
-            let point = scroller.convert(event.locationInWindow, from: nil)
-            if scroller.bounds.contains(point) { return true }
-        }
-        return false
+    /// True when the pointer is over a wide table's SCROLLER STRIP (mirrors the
+    /// task-checkbox suppression above; read-only mode already shows the arrow
+    /// via `applyReadOnlyCursor`). Only the strip is a control surface — over
+    /// the table itself the normal text cursor behavior stays.
+    private func isOverWideTableScroller(_ event: NSEvent) -> Bool {
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        guard let scrollable = wideTableBox(at: viewPoint), scrollable.maxOffset > 0.5 else { return false }
+        return scrollable.scrollerStrip.contains(viewPoint)
     }
 
     /// True inside an embedder exclusion zone — a panel over the editor or a

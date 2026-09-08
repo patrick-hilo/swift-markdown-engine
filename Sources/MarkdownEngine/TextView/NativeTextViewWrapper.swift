@@ -627,8 +627,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.didInitialFormatting = false
             context.coordinator.didEnsureLayoutForCurrentDocument = false
             context.coordinator.resetImageEmbedState()
-            // Drop old document's wide-table overlays synchronously.
-            textView.removeAllWideTableOverlays()
+            // The incoming document's tables start unscrolled; source IDs are
+            // content hashes, so a stale entry could otherwise be inherited.
+            textView.tableHorizontalScrollOffsets.removeAll()
             // Park at top during the rebuild; the new document's own saved offset
             // (if any) is restored after its height is known (see below).
             nsView.contentView.scroll(to: NSPoint(x: 0, y: -nsView.contentInsets.top))

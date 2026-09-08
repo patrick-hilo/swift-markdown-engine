@@ -37,12 +37,16 @@ extension NSAttributedString.Key {
     /// the fragment can paint a `•` in its place. Set to `true`.
     static let bulletMarker = NSAttributedString.Key("BulletListMarker")
     static let orderedMarker = NSAttributedString.Key("OrderedListMarker")
-    /// CGFloat — natural image width; presence flags block as overlay-rendered.
+    /// CGFloat — the block's natural width; presence flags it as horizontally
+    /// scrollable, i.e. wider than the column it is drawn in.
     static let scrollableBlockNaturalWidth = NSAttributedString.Key("ScrollableBlockNaturalWidth")
-    /// Int — hash of source text; key for overlay reconcile + offset persistence.
+    /// CGFloat — the width of the box a scrollable block is drawn in, which is
+    /// the column width its anchor reserved. The natural width minus this is
+    /// how far the block can scroll.
+    static let scrollableBlockDisplayWidth = NSAttributedString.Key("ScrollableBlockDisplayWidth")
+    /// Int — hash of source text; the key a scrolled block's horizontal offset
+    /// is kept under in `NativeTextView.tableHorizontalScrollOffsets`.
     static let scrollableBlockSourceID = NSAttributedString.Key("ScrollableBlockSourceID")
-    /// CGFloat — total reserved height (image + scroller strip) for overlay sizing.
-    static let scrollableBlockTotalHeight = NSAttributedString.Key("ScrollableBlockTotalHeight")
     /// NSValue(range:) — full multi-line range of a rendered table, used to scope width-change restyles.
     static let scrollableBlockFullRange = NSAttributedString.Key("ScrollableBlockFullRange")
 }
@@ -445,12 +449,20 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                 guard isVisual else { return }
                 let isBlock = ts.attribute(.latexIsBlock, at: attrRange.location, effectiveRange: nil) as? Bool ?? false
                 guard isBlock else { return }
-                // Skip overlay blocks; surface bounds must stay within container.
-                if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
-                    return
-                }
                 let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
-                let imageBounds = boundsVal?.rectValue ?? .zero
+                var imageBounds = boundsVal?.rectValue ?? .zero
+                let natural = ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat
+                if natural != nil {
+                    // A scrollable block is wider than its column but is drawn
+                    // clipped to it, so the surface must stay at the box's size —
+                    // reporting the natural width here would make the rendering
+                    // surface reach past the container. Same for both paths: the
+                    // rasterized one draws its image into the same box.
+                    guard let display = ts.attribute(.scrollableBlockDisplayWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat
+                    else { return }
+                    imageBounds.size.width = display
+                    imageBounds.size.height += Self.scrollableBlockScrollerStrip
+                }
                 let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
                 if let rect = blockImageDrawRect(attrRange: attrRange, imageBounds: imageBounds, blockOffsetY: blockOffsetY, point: point) {
                     rects.append(rect)
@@ -473,8 +485,19 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         ts.enumerateAttribute(.latexImage, in: range, options: []) { [weak self] value, attrRange, _ in
             guard let self, let image = value as? NSImage else { return }
 
-            // Skip overlay-rendered blocks; WideTableOverlay owns the visual.
-            if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
+            // A rasterized block wider than its column: same box, same clip and
+            // the same drawn scroller as the text path, so `PTYPE_TABLE_BITMAPS=1`
+            // still shows its wide tables now that the hosting overlay is gone.
+            if let scrollable = self.scrollableBlockBox(
+                in: ts, attrRange: attrRange, point: point, naturalHeight: image.size.height
+            ) {
+                let offset = self.horizontalOffset(for: scrollable)
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(rect: scrollable.box).setClip()
+                image.draw(in: CGRect(x: scrollable.box.minX - offset, y: scrollable.box.minY,
+                                      width: image.size.width, height: image.size.height))
+                NSGraphicsContext.restoreGraphicsState()
+                Self.drawScroller(for: scrollable, offset: offset)
                 return
             }
 
@@ -501,6 +524,91 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         drawTableLayouts(in: ts, range: range, at: point)
     }
 
+    /// One horizontally scrollable block in this fragment — today always a
+    /// table that is wider than the column it sits in.
+    ///
+    /// `box` is the area the block is drawn in: the column's width, and the
+    /// block's height plus the scroller strip, in the same coordinate space as
+    /// the `point` the query was made with. The content inside it is wider;
+    /// `maxOffset` is how far it can be pushed left.
+    struct ScrollableBlockBox {
+        let sourceID: Int
+        let box: CGRect
+        let naturalWidth: CGFloat
+
+        var displayWidth: CGFloat { box.width }
+        /// Largest horizontal offset that still leaves the block's right edge
+        /// flush with the box.
+        var maxOffset: CGFloat { max(0, naturalWidth - box.width) }
+        /// The strip along the bottom of the box that carries the scroller.
+        var scrollerStrip: CGRect {
+            CGRect(x: box.minX,
+                   y: box.maxY - MarkdownTextLayoutFragment.scrollableBlockScrollerStrip,
+                   width: box.width,
+                   height: MarkdownTextLayoutFragment.scrollableBlockScrollerStrip)
+        }
+    }
+
+    /// Every scrollable block in this fragment, with the box it is drawn in.
+    ///
+    /// `point` is the fragment origin the caller works in, exactly as in
+    /// `draw(at:in:)`: pass the fragment frame's origin in view coordinates to
+    /// get boxes in view coordinates, or `.zero` for fragment-local ones. The
+    /// drawing, the rendering surface and the text view's scroll-wheel hit test
+    /// all read their geometry from here, so they cannot drift apart.
+    func scrollableBlockBoxes(at point: CGPoint) -> [ScrollableBlockBox] {
+        guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
+        var boxes: [ScrollableBlockBox] = []
+        for key in [NSAttributedString.Key.tableLayout, .latexImage] {
+            ts.enumerateAttribute(key, in: range, options: []) { [weak self] value, attrRange, _ in
+                guard let self else { return }
+                let naturalHeight: CGFloat
+                switch value {
+                case let layout as TableLayout: naturalHeight = layout.size.height
+                case let image as NSImage: naturalHeight = image.size.height
+                default: return
+                }
+                guard let box = self.scrollableBlockBox(
+                    in: ts, attrRange: attrRange, point: point, naturalHeight: naturalHeight
+                ) else { return }
+                boxes.append(box)
+            }
+        }
+        return boxes
+    }
+
+    /// The box for one anchor, or nil when the block is narrow enough to sit in
+    /// the column and needs no scrolling.
+    private func scrollableBlockBox(
+        in ts: NSTextStorage,
+        attrRange: NSRange,
+        point: CGPoint,
+        naturalHeight: CGFloat
+    ) -> ScrollableBlockBox? {
+        guard let natural = ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat,
+              let display = ts.attribute(.scrollableBlockDisplayWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat,
+              let sourceID = ts.attribute(.scrollableBlockSourceID, at: attrRange.location, effectiveRange: nil) as? Int
+        else { return nil }
+        // The line reserves the block plus the scroller strip; asking for that
+        // height puts the box's top at the line's top, with the strip below the
+        // block instead of split above and below it.
+        let boxBounds = CGRect(x: 0, y: 0,
+                               width: display,
+                               height: naturalHeight + Self.scrollableBlockScrollerStrip)
+        let blockOffsetY = ts.attribute(.latexBlockOffsetY, at: attrRange.location, effectiveRange: nil) as? CGFloat
+        guard let box = blockImageDrawRect(
+            attrRange: attrRange, imageBounds: boxBounds, blockOffsetY: blockOffsetY, point: point
+        ) else { return nil }
+        return ScrollableBlockBox(sourceID: sourceID, box: box, naturalWidth: natural)
+    }
+
+    /// The offset the text view keeps for `sourceID`, clamped to the box.
+    private func horizontalOffset(for scrollable: ScrollableBlockBox) -> CGFloat {
+        let stored = (textLayoutManager?.textContainer?.textView as? NativeTextView)?
+            .tableHorizontalScrollOffsets[scrollable.sourceID] ?? 0
+        return min(scrollable.maxOffset, max(0, stored))
+    }
+
     /// Draws every measured table in this fragment as text.
     ///
     /// The geometry is exactly `drawLatexImages`': the anchor character carries
@@ -508,12 +616,24 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     /// from a bitmap or from its layout. Nothing is cached per pixel — the
     /// cells are laid out from their attributed strings on every draw, which is
     /// what keeps a document's table memory proportional to its text.
+    ///
+    /// A table wider than its column is drawn the same way, shifted by the
+    /// offset the text view keeps for it and clipped to its box, with a drawn
+    /// scroller along the bottom. That replaces the `NSScrollView` those tables
+    /// used to be hosted in, and with it the bitmap each of them needed.
     private func drawTableLayouts(in ts: NSTextStorage, range: NSRange, at point: CGPoint) {
         ts.enumerateAttribute(.tableLayout, in: range, options: []) { [weak self] value, attrRange, _ in
             guard let self, let layout = value as? TableLayout else { return }
 
-            // Skip overlay-rendered blocks; WideTableOverlay owns the visual.
-            if ts.attribute(.scrollableBlockNaturalWidth, at: attrRange.location, effectiveRange: nil) != nil {
+            if let scrollable = self.scrollableBlockBox(
+                in: ts, attrRange: attrRange, point: point, naturalHeight: layout.size.height
+            ) {
+                let offset = self.horizontalOffset(for: scrollable)
+                NSGraphicsContext.saveGraphicsState()
+                NSBezierPath(rect: scrollable.box).setClip()
+                layout.draw(at: scrollable.box.origin, horizontalOffset: offset, clip: scrollable.box)
+                NSGraphicsContext.restoreGraphicsState()
+                Self.drawScroller(for: scrollable, offset: offset)
                 return
             }
 
@@ -528,6 +648,41 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             ) else { return }
             layout.draw(at: drawRect.origin)
         }
+    }
+
+    /// The scroller under a wide block: a pill as long a share of the strip as
+    /// the box is of the content, at the position the offset puts it.
+    ///
+    /// Same look as the `NSScroller` subclass the overlay supplied — 5 pt
+    /// thick, `secondaryLabelColor` at 30 %, no track — so a table that moved
+    /// from the overlay to the text path keeps its appearance.
+    static func drawScroller(for scrollable: ScrollableBlockBox, offset: CGFloat) {
+        guard scrollable.maxOffset > 0.5 else { return }
+        let track = scrollerTrack(for: scrollable)
+        guard track.width > 1, track.height > 1 else { return }
+        let knobWidth = scrollerKnobWidth(for: scrollable)
+        let travel = max(0, track.width - knobWidth)
+        let progress = min(1, max(0, offset / scrollable.maxOffset))
+        let knob = CGRect(x: track.minX + travel * progress, y: track.minY,
+                          width: knobWidth, height: track.height)
+        NSColor.secondaryLabelColor.withAlphaComponent(0.3).setFill()
+        NSBezierPath(roundedRect: knob, xRadius: knob.height / 2, yRadius: knob.height / 2).fill()
+    }
+
+    /// Thickness of the scroller pill.
+    static let scrollerThickness: CGFloat = 5
+
+    /// The band the knob travels in. Shared with the text view so a drag lands
+    /// the knob exactly where the drawing puts it.
+    static func scrollerTrack(for scrollable: ScrollableBlockBox) -> CGRect {
+        let strip = scrollable.scrollerStrip
+        return strip.insetBy(dx: 2, dy: max(0, (strip.height - scrollerThickness) / 2))
+    }
+
+    /// The knob is as long a share of the track as the box is of the content.
+    static func scrollerKnobWidth(for scrollable: ScrollableBlockBox) -> CGFloat {
+        let visibleShare = min(1, scrollable.displayWidth / scrollable.naturalWidth)
+        return max(scrollerThickness * 2, scrollerTrack(for: scrollable).width * visibleShare)
     }
 
     // MARK: - Thematic Breaks (---, ***, ___)

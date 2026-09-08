@@ -82,11 +82,7 @@ final class NativeTextViewContainer: NSView {
         // (0 in full-width mode) — preserve it here.
         let x = textView.configuration.readingWidth != nil ? textView.frame.origin.x : 0
         if abs(textView.frame.origin.y - headerHeight) > 0.01 || abs(textView.frame.origin.x - x) > 0.01 {
-            let deltaY = headerHeight - textView.frame.origin.y
             textView.setFrameOrigin(NSPoint(x: x, y: headerHeight))
-            // Breakout wide-table overlays are siblings whose frames bake in the
-            // text view's offset — keep them glued to their anchor paragraphs.
-            textView.shiftWideTableOverlays(byY: deltaY)
         }
         let viewportH = enclosingScrollView?.contentView.bounds.height ?? 0
         let stacked = headerHeight + textView.frame.height

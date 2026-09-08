@@ -193,8 +193,6 @@ extension NativeTextViewCoordinator {
         native.pendingFullLayoutMeasure = true
         native.recalcOverscroll(for: scrollView, debugTag: "staged")
         (scrollView as? ClampedScrollView)?.clampToInsets()
-        // The chunk restyles skipped the overlay reconcile; one pass against the exact layout.
-        DispatchQueue.main.async { [weak native] in native?.updateWideTableOverlays() }
     }
 
     // MARK: - Viewport

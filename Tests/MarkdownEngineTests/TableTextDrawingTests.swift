@@ -168,6 +168,148 @@ struct TableTextDrawingTests {
         #expect(a.bytes == b.bytes, "the text path must paint exactly what the frozen renderer painted")
     }
 
+    /// A wide table scrolled sideways must show exactly the slice of the table
+    /// the overlay showed at the same scroll offset.
+    ///
+    /// The reference is the frozen renderer's image, cropped at the offset —
+    /// that image is what the `NSImageView` inside the overlay displayed, so
+    /// this is the pixel comparison against what the reader saw before, not
+    /// against the new path's own output.
+    @Test(arguments: [CGFloat(0), 37, 120]) func aScrolledWideTableShowsTheSliceTheOverlayShowed(offset: CGFloat) throws {
+        let source = "| " + (1...8).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
+            + "|" + String(repeating: "---|", count: 8) + "\n"
+            + "| " + (1...8).map { "body cell \($0)" }.joined(separator: " | ") + " |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+        let box: CGFloat = 400
+
+        let oracle = legacyRenderTable(
+            parsed, baseFont: ctx.baseFont, theme: ctx.configuration.theme,
+            codeBackgroundColor: ctx.codeBackgroundColor, latex: ctx.services.latex,
+            appearance: aqua, availableWidth: box, extensions: ctx.configuration.extensions
+        )
+        let table = try layout(source, width: box)
+        #expect(table.size.width > box + 0.5, "the fixture must be wider than its box")
+        #expect(offset <= table.size.width - box, "the offset must stay inside the table")
+
+        // The new path: clipped to the box, shifted by the offset — the same
+        // two lines the fragment runs for a wide table.
+        let drawn = MarkdownStyler.bitmapImage(size: CGSize(width: box, height: table.size.height), appearance: aqua) {
+            NSBezierPath(rect: CGRect(x: 0, y: 0, width: box, height: table.size.height)).setClip()
+            table.draw(at: .zero, horizontalOffset: offset)
+        }
+        // The old path: the overlay's image view, scrolled to the same offset.
+        let cropped = MarkdownStyler.bitmapImage(size: CGSize(width: box, height: table.size.height), appearance: aqua) {
+            NSGraphicsContext.current?.imageInterpolation = .none
+            oracle.draw(in: CGRect(x: -offset, y: 0, width: oracle.size.width, height: oracle.size.height))
+        }
+        let a = try pixels(of: drawn)
+        let b = try pixels(of: cropped)
+        #expect(a.width == b.width)
+        #expect(a.height == b.height)
+        #expect(a.bytes == b.bytes, "the scrolled table must show the overlay's slice, byte for byte")
+    }
+
+    /// Culling rows and columns outside the clip must not change a single pixel.
+    ///
+    /// A wide table repaints on every scroll step, and laying out the cells of
+    /// the columns parked outside the box costs the same as the visible ones —
+    /// several milliseconds per step on a table with many rows. The skip is
+    /// therefore worth having, and worth proving it is invisible.
+    @Test(arguments: [CGFloat(0), 90]) func cullingOutsideTheClipChangesNothing(offset: CGFloat) throws {
+        let rows = (1...14).map { r in
+            "| " + (1...8).map { "row \(r) cell \($0)" }.joined(separator: " | ") + " |"
+        }.joined(separator: "\n")
+        let source = "| " + (1...8).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
+            + "|" + String(repeating: "---|", count: 8) + "\n" + rows
+        let table = try layout(source, width: 400)
+        let aqua = try #require(NSAppearance(named: .aqua))
+        let box = CGRect(x: 0, y: 0, width: 400, height: table.size.height)
+
+        let culled = MarkdownStyler.bitmapImage(size: box.size, appearance: aqua) {
+            NSBezierPath(rect: box).setClip()
+            table.draw(at: .zero, horizontalOffset: offset, clip: box)
+        }
+        let whole = MarkdownStyler.bitmapImage(size: box.size, appearance: aqua) {
+            NSBezierPath(rect: box).setClip()
+            table.draw(at: .zero, horizontalOffset: offset)
+        }
+        #expect(try pixels(of: culled).bytes == pixels(of: whole).bytes)
+    }
+
+    /// The skip has to actually skip something, or the test above is vacuous.
+    @Test func cullingLeavesTheOffscreenColumnsUndrawn() throws {
+        let source = "| " + (1...8).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
+            + "|" + String(repeating: "---|", count: 8) + "\n"
+            + "| " + (1...8).map { "body cell \($0)" }.joined(separator: " | ") + " |"
+        let table = try layout(source, width: 400)
+        let aqua = try #require(NSAppearance(named: .aqua))
+        // A box that shows only the first column: everything else must be clipped
+        // away, so drawing with and without the culling has to agree, and the
+        // culled variant must be measurably cheaper than the whole table.
+        let box = CGRect(x: 0, y: 0, width: table.columnLeft[1], height: table.size.height)
+        let culled = MarkdownStyler.bitmapImage(size: CGSize(width: 400, height: table.size.height), appearance: aqua) {
+            NSBezierPath(rect: box).setClip()
+            table.draw(at: .zero, clip: box)
+        }
+        let whole = MarkdownStyler.bitmapImage(size: CGSize(width: 400, height: table.size.height), appearance: aqua) {
+            NSBezierPath(rect: box).setClip()
+            table.draw(at: .zero)
+        }
+        #expect(try pixels(of: culled).bytes == pixels(of: whole).bytes)
+
+        // …and it really did leave the rest out.
+        let visible = (0..<table.columnCount).filter { table.columnIsVisible($0, x0: 0, clip: box) }
+        #expect(visible == [0], "only the first column reaches into the box")
+        #expect(table.columnCount == 8, "the fixture must have columns to skip")
+    }
+
+    /// Which rows and columns the culling keeps, at the boundaries.
+    @Test func theCullingKeepsEveryBandThatTouchesTheClip() throws {
+        let table = try layout(simple, width: 600)
+        let full = CGRect(x: 0, y: 0, width: table.size.width, height: table.size.height)
+        #expect((0..<table.columnCount).allSatisfy { table.columnIsVisible($0, x0: 0, clip: full) })
+        #expect((0..<table.rowCount).allSatisfy { table.rowIsVisible($0, y0: 0, clip: full) })
+        #expect((0..<table.columnCount).allSatisfy { table.columnIsVisible($0, x0: 0, clip: nil) },
+                "no clip means no culling")
+
+        // A clip a few points wide at the very left keeps the first column only,
+        // and a scrolled table keeps the columns the offset moved into the box.
+        let sliver = CGRect(x: 0, y: 0, width: 3, height: table.size.height)
+        #expect((0..<table.columnCount).filter { table.columnIsVisible($0, x0: 0, clip: sliver) } == [0])
+        let shifted = -table.columnLeft[1]   // first column scrolled out to the left
+        #expect(table.columnIsVisible(0, x0: shifted, clip: sliver) == false)
+        #expect(table.columnIsVisible(1, x0: shifted, clip: sliver))
+    }
+
+    /// A guard on the guard above: an offset that is off by two points has to
+    /// break the comparison, or it would pass for any drawing at all.
+    @Test func theScrolledComparisonCanFail() throws {
+        let source = "| " + (1...8).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
+            + "|" + String(repeating: "---|", count: 8) + "\n"
+            + "| " + (1...8).map { "body cell \($0)" }.joined(separator: " | ") + " |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        let ctx = makeContext(for: source)
+        let aqua = try #require(NSAppearance(named: .aqua))
+        let box: CGFloat = 400
+        let oracle = legacyRenderTable(
+            parsed, baseFont: ctx.baseFont, theme: ctx.configuration.theme,
+            codeBackgroundColor: ctx.codeBackgroundColor, latex: ctx.services.latex,
+            appearance: aqua, availableWidth: box, extensions: ctx.configuration.extensions
+        )
+        let table = try layout(source, width: box)
+        let drawn = MarkdownStyler.bitmapImage(size: CGSize(width: box, height: table.size.height), appearance: aqua) {
+            NSBezierPath(rect: CGRect(x: 0, y: 0, width: box, height: table.size.height)).setClip()
+            table.draw(at: .zero, horizontalOffset: 39)
+        }
+        let cropped = MarkdownStyler.bitmapImage(size: CGSize(width: box, height: table.size.height), appearance: aqua) {
+            NSGraphicsContext.current?.imageInterpolation = .none
+            oracle.draw(in: CGRect(x: -37, y: 0, width: oracle.size.width, height: oracle.size.height))
+        }
+        #expect(try pixels(of: drawn).bytes != pixels(of: cropped).bytes)
+    }
+
     /// A guard on the guard: the oracle must be able to fail. Shifting the
     /// drawn table by one point has to break the pixel comparison, otherwise
     /// the test above proves nothing.
@@ -368,17 +510,45 @@ struct TableTextDrawingTests {
         #expect(anchor.attributes[.tableLayout] == nil)
     }
 
-    /// Stage 1 keeps wide tables on the overlay, which hosts an NSImageView —
-    /// so a wide table still needs its bitmap even with the switch on.
-    @Test func aWideTableStillCarriesItsOverlayBitmap() throws {
-        let wide = "| " + (1...12).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
-            + "|" + String(repeating: "---|", count: 12) + "\n"
-            + "| " + (1...12).map { "body cell \($0)" }.joined(separator: " | ") + " |"
-        let anchor = try styledTableAnchor(wide, drawsAsText: true)
+    /// A wide table is anchored on its layout too, with no bitmap anywhere.
+    /// This is the anchor the memory target hangs on: 13 of the SOP's 15 tables
+    /// are wide, and each of them used to cost a rasterized image plus the
+    /// overlay's copy of it.
+    @Test func aWideTableIsAnchoredOnItsLayoutWithoutABitmap() throws {
+        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: true)
         #expect(anchor.attributes[.scrollableBlockNaturalWidth] != nil, "table should be wide at the 500pt fallback width")
+        #expect(anchor.attributes[.latexImage] == nil, "a wide table must not rasterize either")
+        let layout = try #require(anchor.attributes[.tableLayout] as? TableLayout)
+        let natural = try #require(anchor.attributes[.scrollableBlockNaturalWidth] as? CGFloat)
+        #expect(abs(natural - layout.size.width) < 0.5)
+    }
+
+    /// The box the fragment draws the table in, and the distance it can scroll,
+    /// both come off the anchor — without the display width the fragment would
+    /// have to guess the column's width at draw time.
+    @Test func aWideTableAnchorCarriesTheWidthOfItsBox() throws {
+        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: true)
+        let natural = try #require(anchor.attributes[.scrollableBlockNaturalWidth] as? CGFloat)
+        let display = try #require(anchor.attributes[.scrollableBlockDisplayWidth] as? CGFloat)
+        #expect(display > 0)
+        #expect(natural > display, "a wide table is wider than the box it is drawn in")
+        #expect(anchor.attributes[.scrollableBlockSourceID] is Int, "the offset store needs a key")
+    }
+
+    /// With the switch off a wide table keeps its bitmap, so the comparison
+    /// build still measures the rasterizing path.
+    @Test func theSwitchRestoresTheBitmapForWideTablesToo() throws {
+        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: false)
+        #expect(anchor.attributes[.scrollableBlockNaturalWidth] != nil)
         #expect(anchor.attributes[.latexImage] is NSImage)
         #expect(anchor.attributes[.tableLayout] == nil)
     }
+
+    /// Wide at the 500 pt fallback container width the styling context uses
+    /// without a layout bridge.
+    private static let wideSource = "| " + (1...12).map { "column \($0) heading" }.joined(separator: " | ") + " |\n"
+        + "|" + String(repeating: "---|", count: 12) + "\n"
+        + "| " + (1...12).map { "body cell \($0)" }.joined(separator: " | ") + " |"
 
     // MARK: - LaTeX in cells is appearance-specific
 

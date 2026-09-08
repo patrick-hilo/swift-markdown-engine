@@ -423,26 +423,13 @@ extension MarkdownStyler {
                 if measured { renderedCount += 1 }
                 naturalSize = measuredLayout.size
                 isWide = naturalSize.width > containerWidth + 0.5
-                if isWide {
-                    // The overlay hosts an NSImageView, so a wide table still
-                    // needs pixels. Rasterized from the layout just measured,
-                    // and dropped once the overlay is gone.
-                    let raster = tableImage(
-                        for: source,
-                        parsed: parsed,
-                        ctx: ctx,
-                        appearance: renderAppearance,
-                        availableWidth: containerWidth,
-                        measured: measuredLayout
-                    )
-                    if raster.rendered { rasterizedCount += 1 }
-                    image = raster.image
-                } else {
-                    layout = measuredLayout
-                    // This table may have been wide a moment ago; don't leave
-                    // its bitmap behind.
-                    evictTableImage(for: source, ctx: ctx, appearance: renderAppearance)
-                }
+                layout = measuredLayout
+                // No pixels on this path, wide or narrow: the fragment draws a
+                // wide table clipped to its column and shifted by the offset the
+                // text view keeps for it. Evict unconditionally — a table that
+                // was rasterized before this build, or under the bitmap switch,
+                // would otherwise keep its image for the rest of the session.
+                evictTableImage(for: source, ctx: ctx, appearance: renderAppearance)
             } else {
                 let (renderedImage, rendered) = tableImage(
                     for: source,

@@ -311,6 +311,49 @@ extension NativeTextView {
         } else if abs(frame.origin.x) > 0.5 {
             setFrameOrigin(NSPoint(x: 0, y: frame.origin.y))
         }
+        scheduleTableRestyleForReadingWidth()
+    }
+
+    /// Re-measure the document's tables for a reading column that just changed.
+    ///
+    /// A table's column widths — and whether it is wide enough to scroll at all
+    /// — are measured for the width it was styled at. Nothing else re-measures
+    /// them under a reading column: the frame keeps the column's fixed width, so
+    /// the width-change restyle in `setFrameSize` never fires. That is the width
+    /// error from step 3; without this a table styled for the provisional width
+    /// (925 pt for an 800-pt window on the Mini) stays that wide inside a 736-pt
+    /// column and spills out of it.
+    ///
+    /// Coalesced and deferred to the end of a live resize, because the embedder
+    /// recomputes the reading width from the window geometry: dragging the
+    /// window edge or the sidebar divider calls this once per frame, and the
+    /// restyle re-measures every table in the document at a width no frame
+    /// shares with the next, so every measurement misses the layout cache.
+    private func scheduleTableRestyleForReadingWidth() {
+        // Not during a staged open: `finishStagedStyling` does the same pass once
+        // against the settled width, and doing it per turn would restyle every
+        // table paragraph of a large document repeatedly.
+        guard !contentHeightIsEstimated else { return }
+        guard !pendingTableWidthRestyle else { return }
+        pendingTableWidthRestyle = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pendingTableWidthRestyle = false
+            // Still resizing: the width is not the one to measure for yet.
+            // `viewDidEndLiveResize` runs the pass once the drag settles.
+            guard !self.inLiveResize else {
+                self.needsTableWidthRestyleAfterResize = true
+                return
+            }
+            self.restyleTableParagraphsForWidthChange()
+        }
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        guard needsTableWidthRestyleAfterResize else { return }
+        needsTableWidthRestyleAfterResize = false
+        restyleTableParagraphsForWidthChange()
     }
 
     func centerReadingColumn(forClipWidth clipWidth: CGFloat) {
@@ -325,7 +368,6 @@ extension NativeTextView {
         let delta = originX - frame.origin.x
         if abs(delta) > 0.5 {
             setFrameOrigin(NSPoint(x: originX, y: frame.origin.y))
-            repositionWideTableOverlaysForWidthChange(insetDelta: delta)
         }
     }
 
@@ -359,7 +401,6 @@ extension NativeTextView {
                 if self.configuration.readingWidth == nil {
                     self.restyleTableParagraphsForWidthChange()
                 }
-                self.updateWideTableOverlays()
             }
         }
     }
@@ -376,6 +417,16 @@ extension NativeTextView {
             let r = v.rangeValue
             let key = "\(r.location):\(r.length)"
             if seen.insert(key).inserted { ranges.append(r) }
+        }
+        // A source ID is a content hash, so editing a table's cells orphans its
+        // scroll offset. This walk already has the document open; drop what no
+        // anchor claims any more, the way the overlay reconcile used to.
+        if !tableHorizontalScrollOffsets.isEmpty {
+            var live: Set<Int> = []
+            storage.enumerateAttribute(.scrollableBlockSourceID, in: fullRange, options: []) { value, _, _ in
+                if let id = value as? Int { live.insert(id) }
+            }
+            tableHorizontalScrollOffsets = tableHorizontalScrollOffsets.filter { live.contains($0.key) }
         }
         guard !ranges.isEmpty else { return }
         coord.restyleParagraphs(ranges, in: self)

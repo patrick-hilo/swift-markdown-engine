@@ -19,6 +19,7 @@ extension NativeTextView {
             guard let ts = textStorage, idx >= 0, idx < ts.length else { return false }
             return ts.attribute(.link, at: idx, effectiveRange: nil) != nil
         }()
+        if beginWideTableScrollerDrag(with: event) { return }
         if let toggled = toggleTaskCheckboxIfHit(event: event), toggled { return }
         if remapClickInParagraphSpacing(event: event) { return }
         dragStartMouseScreenLoc = NSEvent.mouseLocation

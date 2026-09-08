@@ -47,6 +47,14 @@ final class TableLayout: NSObject {
     /// layout the way the bitmap path had to.
     let mutedText: NSColor
 
+    /// How often this layout has been drawn.
+    ///
+    /// The only way to observe from outside AppKit whether a repaint really
+    /// reached a layout fragment, which is what `TableFragmentSurfaceTests`
+    /// has to know. Per instance on purpose: a process-wide counter would be
+    /// shared between tests running in parallel.
+    private(set) var drawCount = 0
+
     var columnCount: Int { alignments.count }
     var rowCount: Int { 1 + bodyCells.count }
 
@@ -156,7 +164,14 @@ final class TableLayout: NSObject {
     ///
     /// `horizontalOffset` shifts the content left for a wide table that
     /// scrolls inside a narrower box; the caller is responsible for clipping.
-    func draw(at origin: CGPoint, horizontalOffset: CGFloat = 0) {
+    ///
+    /// `clip`, when given, is the visible rect in the same space as `origin`.
+    /// Rows and columns outside it are skipped. That matters for a wide table:
+    /// it repaints on every scroll event, and laying out the cells of the
+    /// columns parked outside the box costs the same as the visible ones —
+    /// several milliseconds per frame on a table with many rows.
+    func draw(at origin: CGPoint, horizontalOffset: CGFloat = 0, clip: CGRect? = nil) {
+        drawCount += 1
         let border = Self.borderWidth
         let x0 = origin.x - horizontalOffset
         let y0 = origin.y
@@ -203,8 +218,8 @@ final class TableLayout: NSObject {
         }
         separators.stroke()
 
-        for row in 0..<rowCount {
-            for column in 0..<columnCount {
+        for row in 0..<rowCount where rowIsVisible(row, y0: y0, clip: clip) {
+            for column in 0..<columnCount where columnIsVisible(column, x0: x0, clip: clip) {
                 guard let cell = cellText(row: row, column: column),
                       var rect = cellTextRect(row: row, column: column) else { continue }
                 rect.origin.x += x0
@@ -212,6 +227,20 @@ final class TableLayout: NSObject {
                 Self.draw(cell: cell, in: rect, alignment: alignments[column])
             }
         }
+    }
+
+    /// Whether a row's band reaches into `clip`. Internal so the culling can be
+    /// asserted directly: the pixel tests prove it changes nothing, this proves
+    /// it actually leaves something out.
+    func rowIsVisible(_ row: Int, y0: CGFloat, clip: CGRect?) -> Bool {
+        guard let clip else { return true }
+        return y0 + rowTop[row + 1] > clip.minY && y0 + rowTop[row] < clip.maxY
+    }
+
+    /// Whether a column's band reaches into `clip`; see `rowIsVisible`.
+    func columnIsVisible(_ column: Int, x0: CGFloat, clip: CGRect?) -> Bool {
+        guard let clip else { return true }
+        return x0 + columnLeft[column + 1] > clip.minX && x0 + columnLeft[column] < clip.maxX
     }
 
     /// Applies the column's alignment and word wrapping, then draws the cell.

@@ -347,8 +347,8 @@ extension MarkdownStyler {
             let totalHeight = imageBounds.height + scrollerStrip
             var anchorAttrs = widthChangeAnchorAttrs
             anchorAttrs[.scrollableBlockNaturalWidth] = imageBounds.width
+            anchorAttrs[.scrollableBlockDisplayWidth] = displayWidth
             anchorAttrs[.scrollableBlockSourceID] = sourceID
-            anchorAttrs[.scrollableBlockTotalHeight] = totalHeight
             emitCollapsedAttrs(
                 token: token,
                 rawContent: rawContent,
