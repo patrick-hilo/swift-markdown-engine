@@ -107,6 +107,13 @@ final class TableCellEditor: NSTextView, NSTextViewDelegate {
 
 extension NativeTextView {
     override func keyDown(with event: NSEvent) {
+        let deletesBackward = event.keyCode == 51 || event.characters == "\u{7f}" || event.characters == "\u{8}"
+        let deletesForward = event.keyCode == 117 || event.characters == "\u{f728}"
+        if (deletesBackward || deletesForward),
+           beginTableCellEditingForSelection(includingEnd: deletesBackward), let field = tableCellEditor {
+            field.keyDown(with: event)
+            return
+        }
         let entersText = event.characters?.unicodeScalars.contains {
             !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value)
         } ?? false
@@ -119,7 +126,7 @@ extension NativeTextView {
     }
 
     /// Keyboard input at the document caret enters that cell instead of editing hidden delimiters.
-    func beginTableCellEditingForSelection() -> Bool {
+    func beginTableCellEditingForSelection(includingEnd: Bool = false) -> Bool {
         let selection = selectedRange()
         guard configuration.editsTableCells, !configuration.rawSourceMode, selection.length == 0,
               selection.location != NSNotFound,
@@ -127,7 +134,8 @@ extension NativeTextView {
               let parsed = coordinator.cachedParsedDocument else { return false }
         let nearby = MarkdownStyler.scopedSlice(parsed.classified.table, lo: max(0, selection.location - 1), hi: selection.location + 1)
         guard let token = nearby.first(where: {
-            selection.location >= $0.1.range.location && selection.location < NSMaxRange($0.1.range)
+            selection.location >= $0.1.range.location &&
+                (selection.location < NSMaxRange($0.1.range) || (includingEnd && selection.location == NSMaxRange($0.1.range)))
         })?.1, let table = renderedTable(at: token.range.location) else { return false }
         let text = (string as NSString).substring(with: table.range)
         var closest: (row: Int, column: Int, source: TableCellSource, distance: Int)?

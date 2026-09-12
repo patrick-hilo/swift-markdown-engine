@@ -170,6 +170,42 @@ struct TableCellEditorTests {
         #expect(h.view.string == source)
     }
 
+    @Test func backspaceAfterFinishingAnEOFCellPreservesTableDelimiters() throws {
+        let h = try Harness("|A|\n|-|\n|xy|")
+        defer { h.close() }
+        let field = try h.begin()
+        field.insertText("xyz", replacementRange: field.selectedRange())
+        try key("\r", code: 36, in: h)
+        try key("\u{7f}", code: 51, in: h)
+        #expect(h.view.string == "|A|\n|-|\n|xy|")
+        #expect(h.view.tableCellEditor != nil)
+    }
+
+    @Test func deletionAfterArrowNavigationEditsCellContent() throws {
+        let h = try Harness("|A|\n|-|\n|xy|")
+        defer { h.close() }
+        h.window.makeFirstResponder(h.view)
+        try key("\u{f702}", code: 123, in: h)
+        try key("\u{7f}", code: 51, in: h)
+        #expect(h.view.string == "|A|\n|-|\n|x|")
+        #expect(h.view.tableCellEditor != nil)
+    }
+
+    @Test func forwardDeleteInCellAndBackspaceOutsideTableKeepTheirNormalTargets() throws {
+        let h = try Harness()
+        defer { h.close() }
+        h.window.makeFirstResponder(h.view)
+        let original = h.view.string
+        try key("\u{7f}", code: 51, in: h)
+        #expect(h.view.string == String(original.dropLast()))
+        #expect(h.view.tableCellEditor == nil)
+        let cell = (h.view.string as NSString).range(of: "old")
+        h.view.setSelectedRange(NSRange(location: cell.location, length: 0))
+        try key("\u{f728}", code: 117, in: h)
+        #expect(h.view.string.contains("| ld | other |"))
+        #expect(h.view.tableCellEditor != nil)
+    }
+
     @Test func ordinaryTypingAfterATableStaysInTheDocument() throws {
         let h = try Harness()
         defer { h.close() }
