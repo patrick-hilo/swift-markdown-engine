@@ -343,7 +343,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         scrollView.contentView.postsBoundsChangedNotifications = true
         var lastObservedViewportWidth = scrollView.contentView.bounds.width
-        NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
+        let coordinator = context.coordinator
+        coordinator.viewportObservers.append(NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { [weak scrollView, weak textView, weak coordinator] _ in
+            guard let scrollView, let textView, let coordinator else { return }
             // Refresh code-block overlays only on real viewport width changes, not on TextKit height-only echoes during typing.
             let newWidth = scrollView.contentView.bounds.width
             if abs(newWidth - lastObservedViewportWidth) > 0.5 {
@@ -355,8 +357,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 if textView.configuration.readingWidth != nil {
                     textView.centerReadingColumn(forClipWidth: newWidth)
                 }
-                context.coordinator.didEnsureLayoutForCurrentDocument = false
-                context.coordinator.updateCodeBlockSelection(textView: textView)
+                coordinator.didEnsureLayoutForCurrentDocument = false
+                coordinator.updateCodeBlockSelection(textView: textView)
             }
             // Only react with overscroll recalc when the viewport itself resizes
             // (window resize). Without this guard, TextKit-induced frame changes echo
@@ -380,19 +382,20 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             guard abs(container.frame.height - scrollView.contentView.bounds.height) > 1 else { return }
             textView.recalcOverscroll(for: scrollView)
             scrollView.clampToInsets()
-        }
-        NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
+        })
+        coordinator.viewportObservers.append(NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scrollView.contentView, queue: nil) { [weak scrollView, weak textView, weak coordinator] _ in
+            guard let scrollView, let textView, let coordinator else { return }
             textView.ensureVisibleLayout()
             // Scrolling into text the staged open has not styled yet styles it now; the
             // layout above keeps the anchoring exact, and the draw re-lays the viewport out.
-            context.coordinator.styleStagedChunksAroundViewport(of: textView)
-            if context.coordinator.isWritingToolsActive {
-                context.coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
+            coordinator.styleStagedChunksAroundViewport(of: textView)
+            if coordinator.isWritingToolsActive {
+                coordinator.fixWritingToolsChildWindowIfNeeded(textView: textView)
             }
             scrollView.clampToInsets()
-            context.coordinator.refreshActiveLinkCaretRect()
-            context.coordinator.updateCodeBlockSelection(textView: textView)
-        }
+            coordinator.refreshActiveLinkCaretRect()
+            coordinator.updateCodeBlockSelection(textView: textView)
+        })
         reconcileHeader(textView: textView, context: context)
         return scrollView
     }
@@ -770,6 +773,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// different screen — and that is the only moment left to record where the
     /// reader was; the coordinator's own offsets die with it.
     public static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.removeViewportObservers()
+        coordinator.cancelStagedStyling()
         // A restore still pending means the reader was never put back where they
         // were — recording the current offset would overwrite the good one with
         // the mid-load position.

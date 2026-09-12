@@ -68,6 +68,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     /// returns the current value, regardless of when state changed.
     var lastImageFingerprint: AnyHashable?
     var lastWikiFingerprint: AnyHashable?
+    var viewportObservers: [NSObjectProtocol] = []
     private var busObservers: [NSObjectProtocol] = []
     private var registeredAppearanceObserverName: Notification.Name?
     weak var textView: NSTextView?
@@ -471,7 +472,13 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     //   - +Autocorrect     — spell/grammar/quote toggles
     //   - +WritingTools    — macOS 15+ Writing Tools session
 
+    func removeViewportObservers() {
+        viewportObservers.forEach(NotificationCenter.default.removeObserver(_:))
+        viewportObservers.removeAll()
+    }
+
     deinit {
+        removeViewportObservers()
         NotificationCenter.default.removeObserver(self)
         busObservers.forEach(NotificationCenter.default.removeObserver(_:))
     }
