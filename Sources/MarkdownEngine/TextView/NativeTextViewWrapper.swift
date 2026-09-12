@@ -315,7 +315,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         container.autoresizingMask = [.width]
         container.clipsToBounds = true
         container.textView = textView
-        let initialWidth = configuration.readingWidth != nil ? textView.readingColumnWidth : vpSize.width
+        let initialWidth = configuration.readingWidth != nil && !configuration.tablesUseAvailableWidth ? textView.readingColumnWidth : vpSize.width
         textView.frame = NSRect(x: 0, y: 0, width: initialWidth, height: textView.frame.height)
         container.addSubview(textView)
         scrollView.documentView = container
@@ -530,9 +530,19 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 context.coordinator.restyleParagraphs([fullRange], in: textView)
             }
         }
-        // Reading column centers by POSITION (container subview), so the text inset is constant.
+        // Full-width table mode centers the prose container inside a full-width text view.
+        let tableGeometryChanged = textView.configuration.tablesUseAvailableWidth != configuration.tablesUseAvailableWidth
+            || textView.configuration.textInsets.horizontal != configuration.textInsets.horizontal
+        textView.configuration.tablesUseAvailableWidth = configuration.tablesUseAvailableWidth
+        textView.configuration.textInsets = configuration.textInsets
+        let desiredHorizontalInset: CGFloat
+        if configuration.tablesUseAvailableWidth, let readingWidth = configuration.readingWidth {
+            desiredHorizontalInset = max(configuration.textInsets.horizontal, (textView.bounds.width - readingWidth) / 2)
+        } else {
+            desiredHorizontalInset = configuration.textInsets.horizontal
+        }
         let desiredTextInset = NSSize(
-            width: configuration.textInsets.horizontal,
+            width: desiredHorizontalInset,
             height: configuration.textInsets.vertical
         )
         if abs(textView.textContainerInset.width - desiredTextInset.width) > 0.5
@@ -546,6 +556,13 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             context.coordinator.configuration.readingWidth = configuration.readingWidth
             textView.recalcOverscroll(for: nsView)
             (nsView as? ClampedScrollView)?.clampToInsets()
+        }
+        if tableGeometryChanged {
+            context.coordinator.configuration.tablesUseAvailableWidth = configuration.tablesUseAvailableWidth
+            context.coordinator.configuration.textInsets = configuration.textInsets
+            textView.applyManagedFrameSize(width: nsView.contentView.bounds.width)
+            textView.centerReadingColumn(forClipWidth: nsView.contentView.bounds.width)
+            textView.scheduleTableWidthRestyle()
         }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/

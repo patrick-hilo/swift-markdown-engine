@@ -220,7 +220,11 @@ extension NativeTextView {
     /// document-wide attribute scan per event would cost O(document) on a file
     /// with 150 tables.
     func wideTableBox(at viewPoint: CGPoint) -> MarkdownTextLayoutFragment.ScrollableBlockBox? {
-        let containerPoint = CGPoint(x: viewPoint.x - textContainerOrigin.x,
+        // A table's rendering surface can extend beyond the prose container.
+        // Resolve its fragment by Y inside that container, then test the actual box.
+        let containerWidth = textContainer?.size.width ?? 1
+        let lookupX = min(max(0, viewPoint.x - textContainerOrigin.x), max(0, containerWidth - 1))
+        let containerPoint = CGPoint(x: lookupX,
                                      y: viewPoint.y - textContainerOrigin.y)
         guard let tlm = textLayoutManager,
               let fragment = tlm.textLayoutFragment(for: containerPoint) as? MarkdownTextLayoutFragment

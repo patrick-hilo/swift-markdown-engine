@@ -246,6 +246,12 @@ extension NativeTextView {
         recalcOverscroll(for: scrollView, debugTag: "estimate")
     }
 
+    var tableAvailableWidth: CGFloat {
+        configuration.tablesUseAvailableWidth
+            ? max(0, bounds.width - 2 * configuration.textInsets.horizontal)
+            : textContainer?.size.width ?? 0
+    }
+
     /// Fixed reading-column width = wrap width + horizontal insets on both sides.
     var readingColumnWidth: CGFloat {
         (configuration.readingWidth ?? 0) + configuration.textInsets.horizontal * 2
@@ -265,9 +271,9 @@ extension NativeTextView {
         case .fitsContent:
             height = contentHeight
         }
-        // Reading column: the column keeps its fixed wrap width; its centered X is
-        // owned by `centerReadingColumn` (driven from the container's restack).
-        let targetWidth = configuration.readingWidth != nil ? readingColumnWidth : max(width, 0)
+        // The wrap width stays fixed. Full-width table mode expands the view,
+        // with the reading column centered by its text inset.
+        let targetWidth = configuration.readingWidth != nil && !configuration.tablesUseAvailableWidth ? readingColumnWidth : max(width, 0)
         let targetSize = NSSize(
             width: targetWidth,
             height: height
@@ -304,6 +310,7 @@ extension NativeTextView {
             container.size = NSSize(width: width, height: .greatestFiniteMagnitude)
         } else if let container = textContainer {
             container.widthTracksTextView = true
+            textContainerInset = NSSize(width: configuration.textInsets.horizontal, height: configuration.textInsets.vertical)
         }
         applyManagedFrameSize(width: clipWidth)
         if width != nil {
@@ -311,7 +318,7 @@ extension NativeTextView {
         } else if abs(frame.origin.x) > 0.5 {
             setFrameOrigin(NSPoint(x: 0, y: frame.origin.y))
         }
-        scheduleTableRestyleForReadingWidth()
+        scheduleTableWidthRestyle()
     }
 
     /// Re-measure the document's tables for a reading column that just changed.
@@ -329,7 +336,7 @@ extension NativeTextView {
     /// window edge or the sidebar divider calls this once per frame, and the
     /// restyle re-measures every table in the document at a width no frame
     /// shares with the next, so every measurement misses the layout cache.
-    private func scheduleTableRestyleForReadingWidth() {
+    func scheduleTableWidthRestyle() {
         // Not during a staged open: `finishStagedStyling` does the same pass once
         // against the settled width, and doing it per turn would restyle every
         // table paragraph of a large document repeatedly.
@@ -363,6 +370,16 @@ extension NativeTextView {
             var f = container.frame
             f.size.width = max(clipWidth, 0)
             container.frame = f
+        }
+        if configuration.tablesUseAvailableWidth {
+            let widthChanged = abs(frame.width - clipWidth) > 0.5
+            let inset = max(configuration.textInsets.horizontal,
+                            (clipWidth - (configuration.readingWidth ?? 0)) / 2)
+            textContainerInset = NSSize(width: inset, height: configuration.textInsets.vertical)
+            applyManagedFrameSize(width: clipWidth)
+            setFrameOrigin(NSPoint(x: 0, y: frame.origin.y))
+            if widthChanged { scheduleTableWidthRestyle() }
+            return
         }
         let originX = floor(max(0, (clipWidth - readingColumnWidth) / 2))
         let delta = originX - frame.origin.x

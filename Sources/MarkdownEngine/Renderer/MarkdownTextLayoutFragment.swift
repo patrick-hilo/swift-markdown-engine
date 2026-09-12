@@ -431,7 +431,14 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         } else {
             yPosition = firstLineMinY + (lineHeight - imageBounds.height) / 2
         }
-        return CGRect(x: pos.x, y: yPosition,
+        var x = pos.x
+        if let view = textLayoutManager?.textContainer?.textView as? NativeTextView,
+           view.configuration.tablesUseAvailableWidth,
+           textStorage?.attribute(.scrollableBlockFullRange, at: attrRange.location, effectiveRange: nil) != nil,
+           let width = view.textContainer?.size.width {
+            x -= max(0, (imageBounds.width - width) / 2)
+        }
+        return CGRect(x: x, y: yPosition,
                        width: imageBounds.width, height: imageBounds.height)
     }
 

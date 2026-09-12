@@ -46,8 +46,10 @@ public struct MarkdownEditorConfiguration: Sendable {
     public var safeAreaInsets: SafeAreaInsets
     public var scrollers: ScrollersPolicy
     public var textInsets: TextInsets
-    /// Centered reading-column width; wide tables break out to full width. nil = full width (default).
+    /// Centered prose width. nil = full width (default).
     public var readingWidth: CGFloat?
+    /// Let rendered tables use the editor width while prose keeps its reading column.
+    public var tablesUseAvailableWidth: Bool = false
     public var spellChecking: SpellCheckingPolicy
     /// How the editor resolves its own height.
     ///

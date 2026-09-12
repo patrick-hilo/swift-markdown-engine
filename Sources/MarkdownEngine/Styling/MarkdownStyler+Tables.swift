@@ -408,7 +408,7 @@ extension MarkdownStyler {
             // Cells wrap to the container width (Obsidian-style); the render
             // only exceeds it when the per-column floors genuinely don't fit,
             // in which case the scrollable overlay below takes over.
-            let containerWidth = effectiveContainerWidth(for: ctx)
+            let containerWidth = effectiveTableWidth(for: ctx)
             var image: NSImage?
             var layout: TableLayout?
             let naturalSize: CGSize
@@ -962,6 +962,16 @@ extension MarkdownStyler {
             }
         }
         return 500
+    }
+
+    /// Tables can use the outer editor gutters independently of the prose container.
+    static func effectiveTableWidth(for ctx: StylingContext) -> CGFloat {
+        if ctx.configuration.tablesUseAvailableWidth,
+           let view = ctx.layoutBridge?.firstTextContainer?.textView {
+            let width = view.bounds.width - 2 * ctx.configuration.textInsets.horizontal
+            if width.isFinite, width > 0 { return width }
+        }
+        return effectiveContainerWidth(for: ctx)
     }
 
     /// Content-only hash; intentionally collides for identical tables — disambiguated by occurrence index.

@@ -84,7 +84,7 @@ extension NativeTextViewCoordinator {
         stagedStylingPending = plan.pending
         stagedLayoutEnd = 0
         stagedStylingActive = true
-        stagedStylingContainerWidth = textView?.textContainer?.size.width ?? 0
+        stagedStylingContainerWidth = (textView as? NativeTextView)?.tableAvailableWidth ?? textView?.textContainer?.size.width ?? 0
         if let native = textView as? NativeTextView {
             native.contentHeightIsEstimated = true
             native.estimatedContentHeightFloor = 0
@@ -187,7 +187,7 @@ extension NativeTextViewCoordinator {
         // column settles later, and with a reading column a width change restyles no
         // tables; the chunks then rendered their tables for the real width. One pass over
         // the table paragraphs makes the head match.
-        if let width = textView.textContainer?.size.width, abs(width - stagedStylingContainerWidth) > 0.5 {
+        if abs(native.tableAvailableWidth - stagedStylingContainerWidth) > 0.5 {
             native.restyleTableParagraphsForWidthChange()
         }
         native.pendingFullLayoutMeasure = true
