@@ -183,6 +183,7 @@ extension NativeTextView {
         guard configuration.editsTableCells, isEditable, !configuration.rawSourceMode,
               let cell = tableCell(at: point), NSMaxRange(cell.tableRange) <= (string as NSString).length else { return false }
         endTableCellEditing(restoreFocus: false)
+        tableTextSelection = nil
         let table = (string as NSString).substring(with: cell.tableRange)
         guard let source = TableCellSource.cell(in: table, row: cell.row, column: cell.column) else { return false }
         let field = TableCellEditor(owner: self, cell: cell, table: table, source: source)

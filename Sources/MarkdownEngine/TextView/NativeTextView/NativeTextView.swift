@@ -72,6 +72,10 @@ final class NativeTextView: NSTextView {
     /// Return `true` to show the arrow cursor instead of the edit-mode I-beam.
     var isCursorExcluded: ((CGPoint) -> Bool)?
 
+    var tableTextSelection: TableTextSelection?
+    var tablePointer: TablePointer?
+    var tableFindRanges: [NSRange] = []
+    var tableFindCurrent: NSRange?
     var tableCellEditor: TableCellEditor?
 
     // MARK: Wide-table scrolling

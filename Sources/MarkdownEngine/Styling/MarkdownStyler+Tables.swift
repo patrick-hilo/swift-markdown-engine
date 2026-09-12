@@ -633,7 +633,7 @@ extension MarkdownStyler {
         }
         func appendPlain(_ range: NSRange, _ f: NSFont) {
             out.append(NSAttributedString(string: ns.substring(with: range),
-                                          attributes: [.font: f, .foregroundColor: theme.bodyText]))
+                                          attributes: [.font: f, .foregroundColor: theme.bodyText, .tableCellInputRange: NSValue(range: range)]))
         }
         /// Draw a link's label in link colour, or its source when the label is empty —
         /// `[](url)` would otherwise leave the cell blank.
@@ -676,7 +676,8 @@ extension MarkdownStyler {
                 }
             case .code(_, let content):
                 out.append(NSAttributedString(string: ns.substring(with: content), attributes: [
-                    .font: codeFont, .backgroundColor: codeBackgroundColor, .foregroundColor: theme.bodyText
+                    .font: codeFont, .backgroundColor: codeBackgroundColor, .foregroundColor: theme.bodyText,
+                    .tableCellInputRange: NSValue(range: content)
                 ]))
             case .inlineLatex(let range, let content, _):
                 if let entry = latex.render(latex: ns.substring(with: content), fontSize: pointSize, theme: theme) {
@@ -684,7 +685,9 @@ extension MarkdownStyler {
                     attachment.image = entry.image
                     attachment.bounds = CGRect(x: 0, y: entry.baselineOffset,
                                                width: entry.size.width, height: entry.size.height)
-                    out.append(NSAttributedString(attachment: attachment))
+                    let run = NSMutableAttributedString(attachment: attachment)
+                    run.addAttribute(.tableCellInputRange, value: NSValue(range: range), range: NSRange(location: 0, length: run.length))
+                    out.append(run)
                 } else {
                     appendPlain(range, font)   // renderer unavailable → keep raw `$…$`
                 }

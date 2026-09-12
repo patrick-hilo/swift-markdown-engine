@@ -15,6 +15,7 @@ import AppKit
 
 extension NativeTextView {
     override func copy(_ sender: Any?) {
+        if copySelectedTableText(to: .general) { return }
         let sel = selectedRange()
         guard sel.length > 0 else {
             super.copy(sender)

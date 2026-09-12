@@ -170,7 +170,7 @@ final class TableLayout: NSObject {
     /// it repaints on every scroll event, and laying out the cells of the
     /// columns parked outside the box costs the same as the visible ones —
     /// several milliseconds per frame on a table with many rows.
-    func draw(at origin: CGPoint, horizontalOffset: CGFloat = 0, clip: CGRect? = nil) {
+    func draw(at origin: CGPoint, horizontalOffset: CGFloat = 0, clip: CGRect? = nil, decorate: ((Int, Int, NSAttributedString) -> NSAttributedString)? = nil) {
         drawCount += 1
         let border = Self.borderWidth
         let x0 = origin.x - horizontalOffset
@@ -224,7 +224,7 @@ final class TableLayout: NSObject {
                       var rect = cellTextRect(row: row, column: column) else { continue }
                 rect.origin.x += x0
                 rect.origin.y += y0
-                Self.draw(cell: cell, in: rect, alignment: alignments[column])
+                Self.draw(cell: decorate?(row, column, cell) ?? cell, in: rect, alignment: alignments[column])
             }
         }
     }

@@ -632,13 +632,18 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         ts.enumerateAttribute(.tableLayout, in: range, options: []) { [weak self] value, attrRange, _ in
             guard let self, let layout = value as? TableLayout else { return }
 
+            let full = (ts.attribute(.scrollableBlockFullRange, at: attrRange.location, effectiveRange: nil) as? NSValue)?.rangeValue ?? attrRange
+            let view = self.textLayoutManager?.textContainer?.textView as? NativeTextView
+            let decorate: (Int, Int, NSAttributedString) -> NSAttributedString = { row, column, cell in
+                view?.highlightedTableCell(cell, tableRange: full, row: row, column: column) ?? cell
+            }
             if let scrollable = self.scrollableBlockBox(
                 in: ts, attrRange: attrRange, point: point, naturalHeight: layout.size.height
             ) {
                 let offset = self.horizontalOffset(for: scrollable)
                 NSGraphicsContext.saveGraphicsState()
                 NSBezierPath(rect: scrollable.box).setClip()
-                layout.draw(at: scrollable.box.origin, horizontalOffset: offset, clip: scrollable.box)
+                layout.draw(at: scrollable.box.origin, horizontalOffset: offset, clip: scrollable.box, decorate: decorate)
                 NSGraphicsContext.restoreGraphicsState()
                 Self.drawScroller(for: scrollable, offset: offset)
                 return
@@ -653,7 +658,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                 blockOffsetY: blockOffsetY,
                 point: point
             ) else { return }
-            layout.draw(at: drawRect.origin)
+            layout.draw(at: drawRect.origin, decorate: decorate)
         }
     }
 
