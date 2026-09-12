@@ -407,6 +407,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         reconcileHeader(textView: textView, context: context)
 
         let isNodeSwitch = context.coordinator.documentId != documentId
+        if isNodeSwitch { nsView.nativeTextView?.endTableCellEditing(restoreFocus: false) }
 
         // Refreshed here, not with the other callbacks at the bottom — teardown has
         // to reach the CURRENT closures even when the pass below returns early.
@@ -531,6 +532,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             }
         }
         // Full-width table mode centers the prose container inside a full-width text view.
+        textView.configuration.editsTableCells = configuration.editsTableCells
         let tableGeometryChanged = textView.configuration.tablesUseAvailableWidth != configuration.tablesUseAvailableWidth
             || textView.configuration.textInsets.horizontal != configuration.textInsets.horizontal
         textView.configuration.tablesUseAvailableWidth = configuration.tablesUseAvailableWidth
@@ -671,6 +673,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         }
         (nsView as? ClampedScrollView)?.clampToInsets()
 
+        textView.endTableCellEditing(restoreFocus: false)
         // Sync coordinator's font fields BEFORE the rebuild so the helper
         // reads the current values from the View struct.
         context.coordinator.fontName = fontName

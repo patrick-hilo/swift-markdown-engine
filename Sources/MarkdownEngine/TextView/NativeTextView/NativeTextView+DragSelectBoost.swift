@@ -20,6 +20,8 @@ extension NativeTextView {
             return ts.attribute(.link, at: idx, effectiveRange: nil) != nil
         }()
         if beginWideTableScrollerDrag(with: event) { return }
+        if event.clickCount == 1, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+           beginTableCellEditing(at: convert(event.locationInWindow, from: nil)) { return }
         if let toggled = toggleTaskCheckboxIfHit(event: event), toggled { return }
         if remapClickInParagraphSpacing(event: event) { return }
         dragStartMouseScreenLoc = NSEvent.mouseLocation

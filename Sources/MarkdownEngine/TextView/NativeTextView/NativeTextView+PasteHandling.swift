@@ -13,7 +13,13 @@ extension NativeTextView {
         "md", "markdown", "mdown", "mkd", "txt", "text"
     ]
 
+    override func pasteAsPlainText(_ sender: Any?) {
+        if beginTableCellEditingForSelection(), let field = tableCellEditor { field.pasteAsPlainText(sender); return }
+        super.pasteAsPlainText(sender)
+    }
+
     override func paste(_ sender: Any?) {
+        if beginTableCellEditingForSelection(), let field = tableCellEditor { field.paste(sender); return }
         guard isEditable else {
             super.paste(sender)
             return

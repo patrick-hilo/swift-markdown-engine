@@ -1071,3 +1071,62 @@ final class MarkdownLayoutManagerDelegate: NSObject, NSTextLayoutManagerDelegate
         return fragment
     }
 }
+
+struct RenderedTableCell {
+    let tableRange: NSRange
+    let row: Int
+    let column: Int
+    let rect: CGRect
+    let viewport: CGRect
+    let sourceID: Int?
+}
+
+struct RenderedTable {
+    let range: NSRange
+    let layout: TableLayout
+    let viewport: CGRect
+    let offset: CGFloat
+    let sourceID: Int?
+
+    func cell(row: Int, column: Int) -> RenderedTableCell? {
+        guard row >= 0, row < layout.rowCount, column >= 0, column < layout.columnCount else { return nil }
+        let rect = CGRect(x: viewport.minX + layout.columnLeft[column] - offset,
+                          y: viewport.minY + layout.rowTop[row],
+                          width: layout.columnLeft[column + 1] - layout.columnLeft[column] - TableLayout.borderWidth,
+                          height: layout.rowTop[row + 1] - layout.rowTop[row] - TableLayout.borderWidth).intersection(viewport)
+        guard !rect.isNull, rect.width > 1, rect.height > 1 else { return nil }
+        return RenderedTableCell(tableRange: range, row: row, column: column, rect: rect,
+                                 viewport: viewport, sourceID: sourceID)
+    }
+
+    func cell(at point: CGPoint) -> RenderedTableCell? {
+        guard viewport.contains(point) else { return nil }
+        let local = CGPoint(x: point.x - viewport.minX + offset, y: point.y - viewport.minY)
+        guard let column = (0..<layout.columnCount).first(where: { local.x >= layout.columnLeft[$0] && local.x < layout.columnLeft[$0 + 1] }),
+              let row = (0..<layout.rowCount).first(where: { local.y >= layout.rowTop[$0] && local.y < layout.rowTop[$0 + 1] }) else { return nil }
+        return cell(row: row, column: column)
+    }
+}
+
+extension MarkdownTextLayoutFragment {
+    /// The same rectangles used to paint the table, including clipping and horizontal scroll.
+    func renderedTables(at point: CGPoint) -> [RenderedTable] {
+        guard let storage = textStorage, let range = fragmentNSRange else { return [] }
+        var tables: [RenderedTable] = []
+        storage.enumerateAttribute(.tableLayout, in: range) { value, anchor, _ in
+            guard let layout = value as? TableLayout,
+                  let source = storage.attribute(.scrollableBlockFullRange, at: anchor.location, effectiveRange: nil) as? NSValue else { return }
+            if let box = scrollableBlockBox(in: storage, attrRange: anchor, point: point, naturalHeight: layout.size.height) {
+                let viewport = CGRect(origin: box.box.origin, size: CGSize(width: box.box.width, height: layout.size.height))
+                tables.append(RenderedTable(range: source.rangeValue, layout: layout, viewport: viewport,
+                                            offset: horizontalOffset(for: box), sourceID: box.sourceID))
+            } else {
+                let offset = storage.attribute(.latexBlockOffsetY, at: anchor.location, effectiveRange: nil) as? CGFloat
+                guard let rect = blockImageDrawRect(attrRange: anchor, imageBounds: CGRect(origin: .zero, size: layout.size),
+                                                    blockOffsetY: offset, point: point) else { return }
+                tables.append(RenderedTable(range: source.rangeValue, layout: layout, viewport: rect, offset: 0, sourceID: nil))
+            }
+        }
+        return tables
+    }
+}

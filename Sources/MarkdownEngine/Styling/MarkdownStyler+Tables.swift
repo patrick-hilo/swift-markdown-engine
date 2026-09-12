@@ -379,7 +379,7 @@ extension MarkdownStyler {
             let occurrenceIndex = occurrenceByContentHash[meta.hash, default: 0]
             occurrenceByContentHash[meta.hash] = occurrenceIndex + 1
 
-            let isActive = ctx.activeTokenIndices.contains(idx)
+            let isActive = ctx.activeTokenIndices.contains(idx) && !ctx.configuration.editsTableCells
             if isActive {
                 // Caret inside the table — show editable source, pipes muted like other syntax.
                 let muted = ctx.configuration.theme.mutedText

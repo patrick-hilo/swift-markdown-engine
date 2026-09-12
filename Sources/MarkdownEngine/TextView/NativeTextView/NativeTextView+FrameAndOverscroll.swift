@@ -302,6 +302,7 @@ extension NativeTextView {
     /// re-layout of the document.
     func applyReadingWidth(_ width: CGFloat?) {
         guard configuration.readingWidth != width else { return }
+        endTableCellEditing()
         configuration.readingWidth = width
         let clipWidth = enclosingScrollView?.contentView.bounds.width
             ?? superview?.bounds.width ?? frame.width
@@ -373,6 +374,7 @@ extension NativeTextView {
         }
         if configuration.tablesUseAvailableWidth {
             let widthChanged = abs(frame.width - clipWidth) > 0.5
+            if widthChanged { endTableCellEditing() }
             let inset = max(configuration.textInsets.horizontal,
                             (clipWidth - (configuration.readingWidth ?? 0)) / 2)
             textContainerInset = NSSize(width: inset, height: configuration.textInsets.vertical)

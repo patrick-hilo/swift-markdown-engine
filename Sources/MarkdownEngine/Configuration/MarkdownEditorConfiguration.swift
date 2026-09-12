@@ -50,6 +50,8 @@ public struct MarkdownEditorConfiguration: Sendable {
     public var readingWidth: CGFloat?
     /// Let rendered tables use the editor width while prose keeps its reading column.
     public var tablesUseAvailableWidth: Bool = false
+    /// Edit cell Markdown in place while keeping the surrounding table rendered.
+    public var editsTableCells: Bool = false
     public var spellChecking: SpellCheckingPolicy
     /// How the editor resolves its own height.
     ///

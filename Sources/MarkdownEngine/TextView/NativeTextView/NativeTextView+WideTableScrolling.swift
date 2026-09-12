@@ -37,6 +37,7 @@ extension NativeTextView {
     // MARK: - Scroll gesture
 
     override func scrollWheel(with event: NSEvent) {
+        endTableCellEditing()
         let step: WideTableScrollStep
         if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
             step = .began

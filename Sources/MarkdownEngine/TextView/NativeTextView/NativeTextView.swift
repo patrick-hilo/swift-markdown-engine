@@ -72,6 +72,8 @@ final class NativeTextView: NSTextView {
     /// Return `true` to show the arrow cursor instead of the edit-mode I-beam.
     var isCursorExcluded: ((CGPoint) -> Bool)?
 
+    var tableCellEditor: TableCellEditor?
+
     // MARK: Wide-table scrolling
     /// Horizontal scroll offset per wide table, keyed by source-ID hash.
     ///
@@ -100,6 +102,10 @@ final class NativeTextView: NSTextView {
         if let name = configuration.services.syntaxHighlighter.appearanceDidChangeNotification {
             NotificationCenter.default.post(name: name, object: self)
         }
+    }
+
+    override func hasMarkedText() -> Bool {
+        tableCellEditor?.hasMarkedText() == true || super.hasMarkedText()
     }
 
     // setMarkedText skips textDidChange, so restyle the marked paragraph to apply markdown attrs.
