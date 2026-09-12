@@ -492,6 +492,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // undo stack — surviving actions would replay at stale ranges.
         let rawSourceModeChanged = context.coordinator.configuration.rawSourceMode != configuration.rawSourceMode
         if rawSourceModeChanged {
+            textView.cancelTableTextPointer()
+            textView.tableTextSelection = nil
+            textView.setTableFindHighlights([], current: nil)
             context.coordinator.configuration.rawSourceMode = configuration.rawSourceMode
             textView.configuration.rawSourceMode = configuration.rawSourceMode
             textView.breakUndoCoalescing()
@@ -674,6 +677,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         (nsView as? ClampedScrollView)?.clampToInsets()
 
         textView.endTableCellEditing(restoreFocus: false)
+        textView.cancelTableTextPointer()
         // Sync coordinator's font fields BEFORE the rebuild so the helper
         // reads the current values from the View struct.
         context.coordinator.fontName = fontName

@@ -107,6 +107,7 @@ final class TableCellEditor: NSTextView, NSTextViewDelegate {
 
 extension NativeTextView {
     override func keyDown(with event: NSEvent) {
+        if tablePointer != nil { cancelTableTextPointer() }
         let deletesBackward = event.keyCode == 51 || event.characters == "\u{7f}" || event.characters == "\u{8}"
         let deletesForward = event.keyCode == 117 || event.characters == "\u{f728}"
         if (deletesBackward || deletesForward),

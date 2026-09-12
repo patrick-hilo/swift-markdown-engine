@@ -74,6 +74,8 @@ final class NativeTextView: NSTextView {
 
     var tableTextSelection: TableTextSelection?
     var tablePointer: TablePointer?
+    var tableDragTimer: Timer?
+    var tableDragWindowPoint: CGPoint?
     var tableFindRanges: [NSRange] = []
     var tableFindCurrent: NSRange?
     var tableCellEditor: TableCellEditor?
@@ -131,5 +133,5 @@ final class NativeTextView: NSTextView {
         coord.restyleParagraphs([paragraph], in: self)
     }
 
-    deinit { caretIndicatorObservation?.invalidate() }
+    deinit { caretIndicatorObservation?.invalidate(); tableDragTimer?.invalidate() }
 }

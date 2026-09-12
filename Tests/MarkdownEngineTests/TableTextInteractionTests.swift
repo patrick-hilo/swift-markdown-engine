@@ -79,6 +79,69 @@ struct TableTextInteractionTests {
         #expect(draw() == before)
     }
 
+    @Test(arguments: [false, true]) func heldPointerContinuesScrollingBothAxesAndStopsOnRelease(cancelWithEscape: Bool) throws {
+        let header = (0..<20).map { "column\($0)" }.joined(separator: "|")
+        let row = (0..<20).map { "value\($0)" }.joined(separator: "|")
+        let source = "Intro\n\n|\(header)|\n|\(String(repeating: "---|", count: 20))\n" + String(repeating: "|\(row)|\n", count: 50) + "\nTail"
+        let h = try Harness(source)
+        defer { h.close() }
+        let table = try #require(h.view.renderedTable(at: h.tableStart))
+        h.view.baseContentHeight = table.viewport.maxY + 100
+        h.view.applyManagedFrameSize(width: 1000)
+        let start = try point(table, row: 1, column: 0)
+        let edge = CGPoint(x: table.viewport.maxX + 2, y: h.view.visibleRect.maxY - 2)
+        h.view.mouseDown(with: try event(.leftMouseDown, point: start, h: h))
+        let held = try event(.leftMouseDragged, point: edge, h: h)
+        h.view.mouseDragged(with: held)
+        let initialX = h.view.renderedTable(at: h.tableStart)?.offset ?? 0
+        let initialY = h.stack.scrollView.contentView.bounds.minY
+        let initialSelection = h.view.selectedRange().length
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        #expect((h.view.renderedTable(at: h.tableStart)?.offset ?? 0) > initialX)
+        #expect(h.stack.scrollView.contentView.bounds.minY > initialY)
+        #expect(h.view.selectedRange().length > initialSelection)
+        let scrolledX = h.view.renderedTable(at: h.tableStart)?.offset ?? 0
+        let scrolledY = h.stack.scrollView.contentView.bounds.minY
+        let returnEdge = CGPoint(x: table.viewport.minX - 2, y: h.view.visibleRect.minY + 2)
+        h.view.mouseDragged(with: try event(.leftMouseDragged, point: returnEdge, h: h))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect((h.view.renderedTable(at: h.tableStart)?.offset ?? 0) < scrolledX)
+        #expect(h.stack.scrollView.contentView.bounds.minY < scrolledY)
+        if cancelWithEscape {
+            let escape = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: h.window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53))
+            h.view.keyDown(with: escape)
+        } else { h.view.mouseUp(with: held) }
+        #expect(h.view.tableDragTimer == nil)
+        #expect(h.view.tablePointer == nil)
+        let after = h.stack.scrollView.contentView.bounds.origin
+        let selected = h.view.selectedRange()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        #expect(h.stack.scrollView.contentView.bounds.origin == after)
+        #expect(h.view.selectedRange() == selected)
+        #expect(h.view.string == source)
+    }
+
+    @Test func rawPresentationCannotCopyAnOldRenderedSelection() throws {
+        let source = "Intro\n\n|A|B|\n|-|-|\n|**one**|two|\n\nTail"
+        let h = try Harness(source)
+        defer { h.close() }
+        let table = try #require(h.view.renderedTable(at: h.tableStart))
+        let start = try point(table, row: 1, column: 0), end = try point(table, row: 1, column: 1, end: true)
+        h.view.mouseDown(with: try event(.leftMouseDown, point: start, h: h))
+        h.view.mouseDragged(with: try event(.leftMouseDragged, point: end, h: h))
+        h.view.mouseUp(with: try event(.leftMouseUp, point: end, h: h))
+        #expect(h.view.validTableSelection()?.text == "one\ttwo")
+        let selected = h.view.selectedRange()
+        h.view.configuration.rawSourceMode = true
+        h.coordinator.configuration.rawSourceMode = true
+        h.coordinator.rebuildTextStorageAndStyle(h.view, from: source)
+        h.view.setSelectedRange(selected)
+        h.view.copy(nil)
+        #expect(NSPasteboard.general.string(forType: .string) == (source as NSString).substring(with: selected))
+        #expect(h.view.validTableSelection() == nil)
+    }
+
     @Test func clickOpensCellOnlyAfterMouseUp() throws {
         let h = try Harness()
         defer { h.close() }

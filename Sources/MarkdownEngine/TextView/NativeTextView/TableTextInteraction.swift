@@ -19,6 +19,8 @@ struct TablePointer {
     let tableRange: NSRange
     let point: CGPoint
     let anchor: Int
+    let content: TableTextContent
+    let snapshot: String
     var dragging = false
 }
 
@@ -61,7 +63,8 @@ struct TableTextContent {
 
 extension NativeTextView: MarkdownTableTextAccess {
     func validTableSelection() -> TableTextSelection? {
-        guard let selected = tableTextSelection, selected.sourceRange == selectedRange(),
+        guard !configuration.rawSourceMode, configuration.editsTableCells,
+              let selected = tableTextSelection, selected.sourceRange == selectedRange(),
               NSMaxRange(selected.tableRange) <= (string as NSString).length,
               (string as NSString).substring(with: selected.tableRange) == selected.snapshot else { return nil }
         return selected
@@ -77,11 +80,14 @@ extension NativeTextView: MarkdownTableTextAccess {
         guard configuration.editsTableCells, !configuration.rawSourceMode,
               event.clickCount == 1, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
         let point = convert(event.locationInWindow, from: nil)
-        guard let cell = tableCell(at: point), let table = renderedTable(at: cell.tableRange.location),
-              let index = tableTextIndex(at: point, table: table) else { return false }
+        guard let cell = tableCell(at: point), let table = renderedTable(at: cell.tableRange.location) else { return false }
+        let source = (string as NSString).substring(with: table.range)
+        let content = TableTextContent(table: table, source: source)
+        guard let index = tableTextIndex(at: point, table: table, content: content) else { return false }
+        cancelTableTextPointer()
         endTableCellEditing()
         tableTextSelection = nil
-        tablePointer = TablePointer(tableRange: table.range, point: point, anchor: index)
+        tablePointer = TablePointer(tableRange: table.range, point: point, anchor: index, content: content, snapshot: source)
         window?.makeFirstResponder(self)
         return true
     }
@@ -91,17 +97,25 @@ extension NativeTextView: MarkdownTableTextAccess {
         let point = convert(event.locationInWindow, from: nil)
         guard pointer.dragging || hypot(point.x - pointer.point.x, point.y - pointer.point.y) >= 3 else { return }
         pointer.dragging = true; tablePointer = pointer
-        guard var table = renderedTable(at: pointer.tableRange.location) else { return }
-        if let id = table.sourceID {
-            let shift: CGFloat = point.x < table.viewport.minX ? -24 : point.x > table.viewport.maxX ? 24 : 0
-            if shift != 0 {
-                tableHorizontalScrollOffsets[id] = min(max(0, table.offset + shift), max(0, table.layout.size.width - table.viewport.width))
-                table = renderedTable(at: table.range.location) ?? table
+        tableDragWindowPoint = event.locationInWindow
+        if tableDragTimer == nil {
+            let timer = Timer(timeInterval: 1.0 / configuration.dragSelection.ticksPerSecond, repeats: true) { [weak self] _ in
+                self?.performTableDragTick()
             }
+            tableDragTimer = timer
+            RunLoop.main.add(timer, forMode: .common)
         }
-        guard let focus = tableTextIndex(at: point, table: table) else { return }
-        let source = (string as NSString).substring(with: table.range)
-        let content = TableTextContent(table: table, source: source)
+        updateTableDragSelection(at: point)
+    }
+
+    private func updateTableDragSelection(at point: CGPoint) {
+        guard let pointer = tablePointer,
+              let table = renderedTable(at: pointer.tableRange.location),
+              NSMaxRange(table.range) <= (string as NSString).length,
+              (string as NSString).substring(with: table.range) == pointer.snapshot else { cancelTableTextPointer(); return }
+        let content = pointer.content
+        guard let focus = tableTextIndex(at: point, table: table, content: content) else { return }
+        let source = pointer.snapshot
         var selection = NSRange(location: min(pointer.anchor, focus), length: abs(focus - pointer.anchor))
         if selection.length > 0 { selection = (content.text as NSString).rangeOfComposedCharacterSequences(for: selection) }
         guard let local = content.sourceRange(for: selection) else {
@@ -119,8 +133,50 @@ extension NativeTextView: MarkdownTableTextAccess {
 
     override func mouseUp(with event: NSEvent) {
         guard let pointer = tablePointer else { super.mouseUp(with: event); return }
-        tablePointer = nil
+        cancelTableTextPointer()
         if !pointer.dragging { _ = beginTableCellEditing(at: pointer.point) }
+    }
+
+    func cancelTableTextPointer() {
+        tableDragTimer?.invalidate(); tableDragTimer = nil
+        tablePointer = nil; tableDragWindowPoint = nil
+    }
+
+    func performTableDragTick() {
+        guard window != nil, !configuration.rawSourceMode,
+              let pointer = tablePointer, pointer.dragging, let held = tableDragWindowPoint,
+              let scroll = enclosingScrollView, let table = renderedTable(at: pointer.tableRange.location) else {
+            cancelTableTextPointer(); return
+        }
+        let point = convert(held, from: nil)
+        let edge = configuration.dragSelection.edgeTriggerDistance
+        let visible = visibleRect
+        let vertical: CGFloat = point.y < visible.minY + edge ? -1 : point.y > visible.maxY - edge ? 1 : 0
+        var moved = false
+        if vertical != 0 {
+            let clip = scroll.contentView
+            let old = clip.bounds.origin
+            let desired = old.y + vertical * configuration.dragSelection.scrollStepPerTick
+            let constrained = clip.constrainBoundsRect(CGRect(origin: CGPoint(x: old.x, y: desired), size: clip.bounds.size))
+            if constrained.origin != old {
+                (scroll as? ClampedScrollView)?.cancelPendingScrollRestore()
+                clip.scroll(to: constrained.origin)
+                scroll.reflectScrolledClipView(clip)
+                (scroll as? ClampedScrollView)?.clampToInsets()
+                moved = true
+            }
+        }
+        if let id = table.sourceID {
+            let step: CGFloat = point.x < table.viewport.minX + edge ? -24 : point.x > table.viewport.maxX - edge ? 24 : 0
+            let offset = min(max(0, table.offset + step), max(0, table.layout.size.width - table.viewport.width))
+            if offset != table.offset { tableHorizontalScrollOffsets[id] = offset; moved = true }
+        }
+        if moved { updateTableDragSelection(at: convert(held, from: nil)) }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { cancelTableTextPointer() }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -132,13 +188,12 @@ extension NativeTextView: MarkdownTableTextAccess {
         return super.menu(for: event)
     }
 
-    private func tableTextIndex(at point: CGPoint, table: RenderedTable) -> Int? {
+    private func tableTextIndex(at point: CGPoint, table: RenderedTable, content: TableTextContent) -> Int? {
         let local = CGPoint(x: min(max(0, point.x - table.viewport.minX + table.offset), table.layout.size.width - 1),
                             y: min(max(0, point.y - table.viewport.minY), table.layout.size.height - 1))
         guard let target = table.layout.cell(at: local),
               let formatted = table.layout.cellText(row: target.row, column: target.column),
               let rect = table.layout.cellTextRect(row: target.row, column: target.column) else { return nil }
-        let content = TableTextContent(table: table, source: (string as NSString).substring(with: table.range))
         guard let cell = content.cells.first(where: { $0.row == target.row && $0.column == target.column }) else { return nil }
         let geometry = TableCellTextGeometry(formatted, size: rect.size, alignment: table.layout.alignments[target.column])
         return cell.start + geometry.insertionIndex(at: CGPoint(x: local.x - rect.minX, y: local.y - rect.minY))
