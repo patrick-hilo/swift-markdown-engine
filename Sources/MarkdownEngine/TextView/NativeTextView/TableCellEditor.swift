@@ -107,7 +107,11 @@ final class TableCellEditor: NSTextView, NSTextViewDelegate {
 
 extension NativeTextView {
     override func keyDown(with event: NSEvent) {
-        if !event.modifierFlags.contains(.command), beginTableCellEditingForSelection(), let field = tableCellEditor {
+        let entersText = event.characters?.unicodeScalars.contains {
+            !CharacterSet.controlCharacters.contains($0) && !(0xF700...0xF8FF).contains($0.value)
+        } ?? false
+        if entersText, event.modifierFlags.intersection([.command, .control]).isEmpty,
+           beginTableCellEditingForSelection(), let field = tableCellEditor {
             field.keyDown(with: event)
             return
         }
@@ -123,7 +127,7 @@ extension NativeTextView {
               let parsed = coordinator.cachedParsedDocument else { return false }
         let nearby = MarkdownStyler.scopedSlice(parsed.classified.table, lo: max(0, selection.location - 1), hi: selection.location + 1)
         guard let token = nearby.first(where: {
-            selection.location >= $0.1.range.location && selection.location <= NSMaxRange($0.1.range)
+            selection.location >= $0.1.range.location && selection.location < NSMaxRange($0.1.range)
         })?.1, let table = renderedTable(at: token.range.location) else { return false }
         let text = (string as NSString).substring(with: table.range)
         var closest: (row: Int, column: Int, source: TableCellSource, distance: Int)?
@@ -272,4 +276,3 @@ extension NativeTextView {
         return true
     }
 }
-

@@ -6,6 +6,7 @@ struct TableCellSource {
     let text: String
     let prefix: String
     let suffix: String
+    var requiresSpaceWhenEmpty = false
 
     static func cell(in source: String, row: Int, column: Int) -> TableCellSource? {
         guard row >= 0, column >= 0 else { return nil }
@@ -51,7 +52,8 @@ struct TableCellSource {
             let content = (rawCell as String).trimmingCharacters(in: .whitespaces)
             let relative = content.isEmpty ? NSRange(location: rawCell.length, length: 0) : rawCell.range(of: content)
             return TableCellSource(range: NSRange(location: span.location + relative.location, length: relative.length),
-                                   text: content, prefix: "", suffix: "")
+                                   text: content, prefix: "", suffix: "",
+                                   requiresSpaceWhenEmpty: spans.count == 1 && span.length == relative.length)
         }
         // GFM displays omitted trailing cells as empty. Materialize only the requested row's gap.
         let missing = column - spans.count
@@ -61,7 +63,8 @@ struct TableCellSource {
     }
 
     func replacement(for text: String) -> String {
-        prefix + Self.encode(text) + suffix
+        let encoded = Self.encode(text)
+        return prefix + (encoded.isEmpty && requiresSpaceWhenEmpty ? " " : encoded) + suffix
     }
 
     static func encode(_ text: String) -> String {

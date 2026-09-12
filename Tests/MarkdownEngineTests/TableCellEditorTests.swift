@@ -135,6 +135,69 @@ struct TableCellEditorTests {
         #expect(h.view.renderedTable(at: h.tableStart) != nil)
     }
 
+    private func key(_ characters: String, code: UInt16, in h: Harness) throws {
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: 0, windowNumber: h.window.windowNumber, context: nil,
+            characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
+        let responder = try #require(h.window.firstResponder as? NSTextView)
+        responder.keyDown(with: event)
+    }
+
+    @Test func returnAfterCellEditingCreatesAParagraphAfterAnEOFTable() throws {
+        let h = try Harness("| A | B |\n|---|---|\n| old | other |")
+        defer { h.close() }
+        let field = try h.begin()
+        field.insertText("last", replacementRange: field.selectedRange())
+        try key("\r", code: 36, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        let tableSource = h.view.string
+        try key("\r", code: 36, in: h)
+        try key("\r", code: 36, in: h)
+        try key("x", code: 7, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        #expect(h.view.string == tableSource + "\n\nx")
+    }
+
+    @Test func arrowKeysAtTableBoundaryDoNotOpenACell() throws {
+        let h = try Harness("| A | B |\n|---|---|\n| old | other |")
+        defer { h.close() }
+        h.window.makeFirstResponder(h.view)
+        let source = h.view.string
+        try key("\u{f702}", code: 123, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        try key("\u{f703}", code: 124, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        #expect(h.view.string == source)
+    }
+
+    @Test func ordinaryTypingAfterATableStaysInTheDocument() throws {
+        let h = try Harness()
+        defer { h.close() }
+        h.window.makeFirstResponder(h.view)
+        let source = h.view.string
+        try key("x", code: 7, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        #expect(h.view.string == source + "x")
+    }
+
+    @Test(arguments: [0, 1]) func deletingACompactSingleCellKeepsEditingAndEscape(row: Int) throws {
+        let original = "|A|\n|-|\n|x|"
+        let h = try Harness(original)
+        defer { h.close() }
+        let field = try h.begin(row: row)
+        field.selectAll(nil)
+        try key("\u{7f}", code: 51, in: h)
+        #expect(h.view.tableCellEditor === field)
+        #expect(field.string.isEmpty)
+        #expect(h.view.renderedTable(at: h.tableStart)?.cell(row: row, column: 0) != nil)
+        try key("z", code: 6, in: h)
+        #expect(field.string == "z")
+        #expect(h.view.string == original.replacingOccurrences(of: row == 0 ? "|A|" : "|x|", with: "|z|"))
+        try key("\u{1b}", code: 53, in: h)
+        #expect(h.view.tableCellEditor == nil)
+        #expect(h.view.string == original)
+    }
+
     @Test func openingAndClosingACellDoesNotNormalizeItsExistingSource() throws {
         let original = "Intro.\n\n| A | B |\n|---|---|\n|  `a \\| b`  |   |\n\nTail."
         let h = try Harness(original)
