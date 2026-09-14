@@ -31,11 +31,20 @@ extension NativeTextView {
         // be replaced by the styled document or is being styled and laid out in stages
         // after the first frame, and the staged finish measures the exact height.
         if debugTag == "open" { pendingFullLayoutMeasure = false }
-        let forcedFullLayout = pendingFullLayoutMeasure
-        let measured = measuredBaseContentHeight(
+        var forcedFullLayout = pendingFullLayoutMeasure
+        var measured = measuredBaseContentHeight(
             minimumHeight: lineHeight,
             forceFullLayout: pendingFullLayoutMeasure
         )
+        // A viewport jump can make TextKit report a transiently shorter document.
+        // Verify a shrink that would cut off the current viewport before resizing:
+        // resizing first lets AppKit clamp the clip view to that temporary height.
+        if !forcedFullLayout, !contentHeightIsEstimated,
+           measured < baseContentHeight - 0.5,
+           measured + activeBottomOverscroll < visibleRect.maxY {
+            measured = measuredBaseContentHeight(minimumHeight: lineHeight, forceFullLayout: true)
+            forcedFullLayout = true
+        }
         let visibleHeight = scrollView.contentView.bounds.height
         let resolvedOverscroll = resolvedOverscroll(
             baseContentHeight: measured,
