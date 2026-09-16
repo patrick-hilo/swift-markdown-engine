@@ -60,7 +60,7 @@ public extension NSAttributedString.Key {
     /// `.backgroundColor` leaves a gap between every pair of lines.
     ///
     /// Painted by `MarkdownTextLayoutFragment`, so it renders in the editor
-    /// only — table cells rasterize their own text and fall back to
+    /// only — table cells draw their own text and fall back to
     /// `.backgroundColor` (see `MarkdownStyler+Tables`).
     static let markdownBlockBackground = NSAttributedString.Key("MarkdownBlockBackground")
 }
@@ -536,8 +536,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                     // A scrollable block is wider than its column but is drawn
                     // clipped to it, so the surface must stay at the box's size —
                     // reporting the natural width here would make the rendering
-                    // surface reach past the container. Same for both paths: the
-                    // rasterized one draws its image into the same box.
+                    // surface reach past the container.
                     guard let display = ts.attribute(.scrollableBlockDisplayWidth, at: attrRange.location, effectiveRange: nil) as? CGFloat
                     else { return }
                     imageBounds.size.width = display
@@ -564,22 +563,6 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         ts.enumerateAttribute(.latexImage, in: range, options: []) { [weak self] value, attrRange, _ in
             guard let self, let image = value as? NSImage else { return }
-
-            // A rasterized block wider than its column: same box, same clip and
-            // the same drawn scroller as the text path, so `PTYPE_TABLE_BITMAPS=1`
-            // still shows its wide tables now that the hosting overlay is gone.
-            if let scrollable = self.scrollableBlockBox(
-                in: ts, attrRange: attrRange, point: point, naturalHeight: image.size.height
-            ) {
-                let offset = self.horizontalOffset(for: scrollable)
-                NSGraphicsContext.saveGraphicsState()
-                NSBezierPath(rect: scrollable.box).setClip()
-                image.draw(in: CGRect(x: scrollable.box.minX - offset, y: scrollable.box.minY,
-                                      width: image.size.width, height: image.size.height))
-                NSGraphicsContext.restoreGraphicsState()
-                Self.drawScroller(for: scrollable, offset: offset)
-                return
-            }
 
             let boundsVal = ts.attribute(.latexBounds, at: attrRange.location, effectiveRange: nil) as? NSValue
             let imageBounds = boundsVal?.rectValue ?? CGRect(origin: .zero, size: image.size)
@@ -639,20 +622,14 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     func scrollableBlockBoxes(at point: CGPoint) -> [ScrollableBlockBox] {
         guard let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
         var boxes: [ScrollableBlockBox] = []
-        for key in [NSAttributedString.Key.tableLayout, .latexImage] {
-            ts.enumerateAttribute(key, in: range, options: []) { [weak self] value, attrRange, _ in
-                guard let self else { return }
-                let naturalHeight: CGFloat
-                switch value {
-                case let layout as TableLayout: naturalHeight = layout.size.height
-                case let image as NSImage: naturalHeight = image.size.height
-                default: return
-                }
-                guard let box = self.scrollableBlockBox(
-                    in: ts, attrRange: attrRange, point: point, naturalHeight: naturalHeight
-                ) else { return }
-                boxes.append(box)
-            }
+        // Only a measured table can be wider than its column; LaTeX blocks and
+        // images never carry the scrollable attributes.
+        ts.enumerateAttribute(.tableLayout, in: range, options: []) { [weak self] value, attrRange, _ in
+            guard let self, let layout = value as? TableLayout,
+                  let box = self.scrollableBlockBox(
+                      in: ts, attrRange: attrRange, point: point, naturalHeight: layout.size.height
+                  ) else { return }
+            boxes.append(box)
         }
         return boxes
     }
@@ -692,8 +669,8 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
     /// Draws every measured table in this fragment as text.
     ///
     /// The geometry is exactly `drawLatexImages`': the anchor character carries
-    /// `.latexBounds`, so a table occupies the same rect whether it is drawn
-    /// from a bitmap or from its layout. Nothing is cached per pixel — the
+    /// `.latexBounds`, so a table occupies the same rect a block image would.
+    /// Nothing is cached per pixel — the
     /// cells are laid out from their attributed strings on every draw, which is
     /// what keeps a document's table memory proportional to its text.
     ///

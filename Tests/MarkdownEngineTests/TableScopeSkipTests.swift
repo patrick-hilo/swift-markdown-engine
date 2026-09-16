@@ -9,7 +9,7 @@
 //  work when it renders (inactive + in scope) or shares a length with a
 //  rendering table (duplicate-sourceID stability). Typing prose renders no
 //  table → all skip. Table sources here are unique so they never warm the
-//  shared image cache used by TableImageCacheTests.
+//  shared layout cache used by TableTextDrawingTests.
 //
 
 import AppKit
@@ -24,7 +24,7 @@ struct TableScopeSkipTests {
         text: String,
         scopeBounds: (lo: Int, hi: Int)?
     ) -> MarkdownStyler.StylingContext {
-        _ = NSApplication.shared   // styleTables reads NSApp.effectiveAppearance
+        _ = NSApplication.shared   // AppKit must be initialised before styling
         let tokens = MarkdownTokenizer.parseTokensViaAST(in: text)
         let font = NSFont.systemFont(ofSize: 15)
         var ctx = MarkdownStyler.StylingContext(

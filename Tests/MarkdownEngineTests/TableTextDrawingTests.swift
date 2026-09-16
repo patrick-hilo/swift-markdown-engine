@@ -3,8 +3,8 @@
 //  MarkdownEngine
 //
 //  Tables drawn as text from a measured layout instead of a cached bitmap:
-//  per-cell geometry, agreement with the bitmap path it replaces, and the
-//  memory property the whole change exists for.
+//  per-cell geometry, agreement with the frozen bitmap renderer it replaced
+//  (`LegacyTableRenderer`), and the memory property the change exists for.
 //
 
 import AppKit
@@ -118,15 +118,15 @@ struct TableTextDrawingTests {
         #expect(table.cellText(row: 3, column: 0) == nil)
     }
 
-    // MARK: - Agreement with the bitmap path
+    // MARK: - Agreement with the frozen renderer
 
     /// The text path must paint what the table renderer painted BEFORE
     /// measurement and drawing were split apart.
     ///
     /// The oracle is a frozen copy of that renderer (`legacyRenderTable`), not
-    /// today's `tableImage` — which now runs the very code under test, so
-    /// comparing against it would compare the new path with itself and pass
-    /// even if every cell moved.
+    /// `TableLayout.draw` through the test helper — that is the very code under
+    /// test, so comparing against it would compare the new path with itself
+    /// and pass even if every cell moved.
     @Test(arguments: [
         "| alpha | beta |\n|:--|--:|\n| one | two |\n| three | four |",
         "| centred | right |\n|:-:|--:|\n| a | b |",
@@ -386,13 +386,11 @@ struct TableTextDrawingTests {
     @Test func aLayoutCostsFarLessThanItsBitmap() throws {
         let source = "| heading one | heading two | heading three |\n|---|---|---|\n"
             + (1...20).map { "| row \($0) cell a | row \($0) cell b | row \($0) cell c |" }.joined(separator: "\n")
-        let parsed = try #require(MarkdownStyler.parseTableSource(source))
-        let ctx = makeContext(for: source)
         let aqua = try #require(NSAppearance(named: .aqua))
         let table = try layout(source, width: 800)
-        let image = MarkdownStyler.tableImage(
-            for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 800
-        ).image
+        let image = MarkdownStyler.bitmapImage(size: table.size, appearance: aqua) {
+            table.draw(at: .zero)
+        }
         let cgImage = try #require(image.representations.first?.cgImage(forProposedRect: nil, context: nil, hints: nil))
         let bitmapBytes = cgImage.bytesPerRow * cgImage.height
         #expect(table.approximateByteCount * 20 < bitmapBytes,
@@ -462,11 +460,46 @@ struct TableTextDrawingTests {
         #expect(backAtOldWidth.measured, "the 2000-wide layout should have been evicted by the 1500-wide one")
     }
 
+    /// NSColor descriptions are not identities: two named dynamic colors sharing
+    /// a name describe identically. The key must use resolved components instead.
+    @Test func sameNamedDynamicColorsDoNotCollide() throws {
+        let source = "| eta | theta |\n|---|---|\n| layout key 9 | 10 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+
+        var blueBody = MarkdownEditorConfiguration.default
+        blueBody.theme.bodyText = NSColor(name: "body") { _ in .systemBlue }
+        var redBody = MarkdownEditorConfiguration.default
+        redBody.theme.bodyText = NSColor(name: "body") { _ in .systemRed }
+
+        _ = MarkdownStyler.tableLayout(
+            for: source, parsed: parsed, ctx: makeContext(for: source, configuration: blueBody), availableWidth: 2000
+        )
+        let red = MarkdownStyler.tableLayout(
+            for: source, parsed: parsed, ctx: makeContext(for: source, configuration: redBody), availableWidth: 2000
+        )
+        #expect(red.measured)
+    }
+
+    /// `==x==` measures highlighted under one config and literal under another;
+    /// those must never share a layout.
+    @Test func differentExtensionRegistriesDoNotShareCacheEntries() throws {
+        let source = "| a | b |\n|---|---|\n| ==layout x== | 2 |"
+        let parsed = try #require(MarkdownStyler.parseTableSource(source))
+        var extConfig = MarkdownEditorConfiguration.default
+        extConfig.extensions = [HighlightExtension()]
+        _ = MarkdownStyler.tableLayout(
+            for: source, parsed: parsed, ctx: makeContext(for: source, configuration: extConfig), availableWidth: 2000
+        )
+        let plain = MarkdownStyler.tableLayout(
+            for: source, parsed: parsed, ctx: makeContext(for: source), availableWidth: 2000
+        )
+        #expect(plain.measured, "plain-config table must not reuse the extension-config layout")
+    }
+
     // MARK: - What the styler emits
 
     private func styledTableAnchor(
-        _ text: String,
-        drawsAsText: Bool
+        _ text: String
     ) throws -> (range: NSRange, attributes: [NSAttributedString.Key: Any]) {
         _ = NSApplication.shared
         let tokens = MarkdownTokenizer.parseTokensViaAST(in: text)
@@ -484,9 +517,7 @@ struct TableTextDrawingTests {
             configuration: .default,
             wikiLinkIDProvider: { _ in nil }
         )
-        var scoped = context
-        scoped.drawsTablesAsText = drawsAsText
-        let attributes = MarkdownStyler.styleTables(scoped)
+        let attributes = MarkdownStyler.styleTables(context)
         return try #require(attributes.first { $0.attributes[.latexIsBlock] != nil })
     }
 
@@ -494,7 +525,7 @@ struct TableTextDrawingTests {
     /// `.latexBounds` still describes the same rect, so the fragment places it
     /// exactly where the image path placed the image.
     @Test func theStylerAnchorsANarrowTableOnItsLayout() throws {
-        let anchor = try styledTableAnchor("| a | b |\n|---|---|\n| 1 | 2 |", drawsAsText: true)
+        let anchor = try styledTableAnchor("| a | b |\n|---|---|\n| 1 | 2 |")
         let table = try #require(anchor.attributes[.tableLayout] as? TableLayout)
         #expect(anchor.attributes[.latexImage] == nil, "the text path must not also retain a bitmap")
         let bounds = try #require(anchor.attributes[.latexBounds] as? NSValue).rectValue
@@ -502,20 +533,12 @@ struct TableTextDrawingTests {
         #expect(abs(bounds.height - table.size.height) < 0.5)
     }
 
-    /// With the switch off the anchor goes back to a bitmap, so the comparison
-    /// build measures the path it is supposed to measure.
-    @Test func theSwitchRestoresTheBitmapAnchor() throws {
-        let anchor = try styledTableAnchor("| a | b |\n|---|---|\n| 1 | 2 |", drawsAsText: false)
-        #expect(anchor.attributes[.latexImage] is NSImage)
-        #expect(anchor.attributes[.tableLayout] == nil)
-    }
-
     /// A wide table is anchored on its layout too, with no bitmap anywhere.
     /// This is the anchor the memory target hangs on: 13 of the SOP's 15 tables
     /// are wide, and each of them used to cost a rasterized image plus the
     /// overlay's copy of it.
     @Test func aWideTableIsAnchoredOnItsLayoutWithoutABitmap() throws {
-        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: true)
+        let anchor = try styledTableAnchor(Self.wideSource)
         #expect(anchor.attributes[.scrollableBlockNaturalWidth] != nil, "table should be wide at the 500pt fallback width")
         #expect(anchor.attributes[.latexImage] == nil, "a wide table must not rasterize either")
         let layout = try #require(anchor.attributes[.tableLayout] as? TableLayout)
@@ -527,21 +550,12 @@ struct TableTextDrawingTests {
     /// both come off the anchor — without the display width the fragment would
     /// have to guess the column's width at draw time.
     @Test func aWideTableAnchorCarriesTheWidthOfItsBox() throws {
-        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: true)
+        let anchor = try styledTableAnchor(Self.wideSource)
         let natural = try #require(anchor.attributes[.scrollableBlockNaturalWidth] as? CGFloat)
         let display = try #require(anchor.attributes[.scrollableBlockDisplayWidth] as? CGFloat)
         #expect(display > 0)
         #expect(natural > display, "a wide table is wider than the box it is drawn in")
         #expect(anchor.attributes[.scrollableBlockSourceID] is Int, "the offset store needs a key")
-    }
-
-    /// With the switch off a wide table keeps its bitmap, so the comparison
-    /// build still measures the rasterizing path.
-    @Test func theSwitchRestoresTheBitmapForWideTablesToo() throws {
-        let anchor = try styledTableAnchor(Self.wideSource, drawsAsText: false)
-        #expect(anchor.attributes[.scrollableBlockNaturalWidth] != nil)
-        #expect(anchor.attributes[.latexImage] is NSImage)
-        #expect(anchor.attributes[.tableLayout] == nil)
     }
 
     /// Wide at the 500 pt fallback container width the styling context uses

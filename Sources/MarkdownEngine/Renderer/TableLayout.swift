@@ -160,7 +160,7 @@ final class TableLayout: NSObject {
 
     /// Draws the table with its top-left corner at `origin` in the current
     /// graphics context, which must be flipped (top-down), as both the text
-    /// view's fragment drawing and `MarkdownStyler.bitmapImage` are.
+    /// fragment drawing and the tests' rasterization helper are.
     ///
     /// `horizontalOffset` shifts the content left for a wide table that
     /// scrolls inside a narrower box; the caller is responsible for clipping.
@@ -244,8 +244,7 @@ final class TableLayout: NSObject {
     }
 
     /// Applies the column's alignment and word wrapping, then draws the cell.
-    /// Shared by the text path and the legacy bitmap path so both wrap
-    /// identically to what `cellHeight` measured.
+    /// Wraps identically to what `cellHeight` measured.
     static func draw(cell: NSAttributedString, in rect: CGRect, alignment: MarkdownStyler.TableAlignment) {
         let paragraph = NSMutableParagraphStyle()
         switch alignment {

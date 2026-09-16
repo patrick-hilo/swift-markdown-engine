@@ -2,10 +2,10 @@
 //  MarkdownStyler+Tables.swift
 //  MarkdownEngine
 //
-//  GFM tables. The block is rendered to a single NSImage and emitted via
+//  GFM tables. The block is measured into a `TableLayout` and emitted via
 //  the same collapsedSource path block-LaTeX uses, so the source stays
-//  in sync with the document but the user only sees the rendered grid
-//  when the caret is outside the table.
+//  in sync with the document while the layout fragment draws the grid as
+//  text; the caret inside the table reveals the source.
 //
 
 import AppKit
@@ -25,40 +25,11 @@ extension MarkdownStyler {
         let rows: [[String]]
     }
 
-    /// Rendered-table image cache. A table's pixels depend only on its source,
-    /// font, colors, and appearance — so identical keys can reuse the NSImage
-    /// instead of re-rendering every inactive table on every keystroke.
-    static let tableImageCache: NSCache<NSString, NSImage> = {
-        let cache = NSCache<NSString, NSImage>()
-        // Must exceed a document's unique-table count or a full restyle (load /
-        // theme / font change) re-renders every table (same thrash class as the
-        // metadata cap). NSCache still auto-evicts under memory pressure.
-        cache.countLimit = 2048
-        // Bitmap bytes are the cost (see `tableImage`): the cache is process-wide
-        // and lives for the whole session, so without a byte cap a document with
-        // many tables pins hundreds of MiB.
-        cache.totalCostLimit = 256 * 1024 * 1024
-        return cache
-    }()
-
-    /// Latest cache key per table identity (theme + extensions + source, without
-    /// the width). A render at a new width evicts the previous width's bitmap;
-    /// otherwise every live-resize step leaves a full set of table bitmaps behind.
-    /// Guarded by `themeKeyLock` (parallel test runs render off the main thread).
-    private static var latestTableImageKeys: [String: NSString] = [:]
-
-    /// Backing scale the table bitmaps are rasterized at: the largest attached
-    /// screen, so a table stays sharp when its window moves between displays.
-    static var tableBitmapScale: CGFloat {
-        let largest = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
-        return max(1, largest)
-    }
-
     /// Pixel-level fingerprint of a theme color: its sRGB components resolved
     /// under `appearance`. NSColor descriptions are not sound identities —
     /// named dynamic colors describe by name only (two providers collide),
     /// unnamed ones by per-instance UUID (never hit) — so key on what actually
-    /// reaches the bitmap.
+    /// reaches the pixels.
     private static func colorKey(_ color: NSColor, under appearance: NSAppearance) -> String {
         var srgb: NSColor?
         appearance.performAsCurrentDrawingAppearance {
@@ -91,7 +62,7 @@ extension MarkdownStyler {
         }
         themeKeyLock.unlock()
 
-        // Every input renderTable reads must be in the key: fonts, all theme
+        // Every input measureTable reads must be in the key: fonts, all theme
         // colors it draws with, and the latex renderer (by type — a NoOp and a
         // real renderer must not share entries).
         let prefix = [
@@ -147,101 +118,16 @@ extension MarkdownStyler {
         return computed
     }
 
-    /// Returns the rendered image for `source`, from cache when possible.
-    /// `rendered` is true only when a fresh render actually happened.
-    /// `availableWidth` caps the table's width (cells wrap onto extra lines);
-    /// it is part of the cache key because the layout depends on it.
-    static func tableImage(
-        for source: String,
-        parsed: ParsedTable,
-        ctx: StylingContext,
-        appearance: NSAppearance,
-        availableWidth: CGFloat,
-        measured: TableLayout? = nil
-    ) -> (image: NSImage, rendered: Bool) {
-        let widthKey = Int(availableWidth.rounded())
-        // The extension registry is part of the key: `==x==` in a cell renders
-        // highlighted under one config and literal under another — those must
-        // never share a cached image.
-        let extensionKey = ctx.configuration.extensionRegistry.fingerprint
-        let identity = themeKeyPrefix(ctx: ctx, appearance: appearance) + "|x\(extensionKey)|" + source
-        let key = (identity + "|w\(widthKey)") as NSString
-        if let cached = tableImageCache.object(forKey: key) {
-            return (cached, false)
-        }
-        themeKeyLock.lock()
-        let previous = latestTableImageKeys[identity]
-        if latestTableImageKeys.count > 4096 { latestTableImageKeys.removeAll() }
-        latestTableImageKeys[identity] = key
-        themeKeyLock.unlock()
-        if let previous, previous != key {
-            tableImageCache.removeObject(forKey: previous)
-        }
-        let image: NSImage
-        if let measured {
-            // Caller already measured this table at this width; rasterizing the
-            // same layout avoids a second pass over every cell.
-            image = bitmapImage(size: measured.size, appearance: appearance) {
-                measured.draw(at: .zero)
-            }
-        } else {
-            image = renderTable(
-                parsed,
-                baseFont: ctx.baseFont,
-                theme: ctx.configuration.theme,
-                codeBackgroundColor: ctx.codeBackgroundColor,
-                latex: ctx.services.latex,
-                appearance: appearance,
-                availableWidth: availableWidth,
-                extensions: ctx.configuration.extensions
-            )
-        }
-        tableImageCache.setObject(image, forKey: key, cost: bitmapByteCount(of: image))
-        return (image, true)
-    }
-
-    /// Drops any cached bitmap for `source` at the current theme/appearance.
-    ///
-    /// A table that was wide and becomes narrow (window widened, reading column
-    /// changed) stops asking for an image, so its bitmap would otherwise sit in
-    /// the cache for the rest of the session — the exact cost this change
-    /// exists to remove. Goes away with the bitmap path itself.
-    static func evictTableImage(for source: String, ctx: StylingContext, appearance: NSAppearance) {
-        let extensionKey = ctx.configuration.extensionRegistry.fingerprint
-        let identity = themeKeyPrefix(ctx: ctx, appearance: appearance) + "|x\(extensionKey)|" + source
-        themeKeyLock.lock()
-        let previous = latestTableImageKeys.removeValue(forKey: identity)
-        themeKeyLock.unlock()
-        if let previous { tableImageCache.removeObject(forKey: previous) }
-    }
-
-    private static func bitmapByteCount(of image: NSImage) -> Int {
-        guard let cgImage = image.representations.first?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return 0 }
-        return cgImage.bytesPerRow * cgImage.height
-    }
-
     // MARK: - Measured table layouts
 
-    /// Default for `StylingContext.drawsTablesAsText`, read once from the
-    /// environment: set `PTYPE_TABLE_BITMAPS=1` to get a build that still
-    /// rasterizes tables, so the memory and scroll comparison can be measured
-    /// against the same binary.
-    ///
-    /// A `let`, not a settable global: the styler runs off the main thread and
-    /// tests run in parallel, so a mutable switch would be a data race and
-    /// would leak between tests. The whole bitmap path goes away once the text
-    /// path owns selection, accessibility and in-cell editing.
-    static let drawsTablesAsTextByDefault: Bool =
-        ProcessInfo.processInfo.environment["PTYPE_TABLE_BITMAPS"] != "1"
-
-    /// Measured-layout cache, the text path's counterpart to `tableImageCache`.
+    /// Measured-layout cache.
     ///
     /// Entries hold cell strings and measurement arrays, not pixels: a full
     /// SOP's worth costs a few hundred kilobytes where the bitmaps cost tens of
-    /// megabytes, so the byte cap is far lower and still never binds in
-    /// practice. `countLimit` follows the image cache for the same reason
-    /// documented there — it must exceed a document's unique-table count or a
-    /// full restyle re-measures every table.
+    /// megabytes, so the byte cap is low and still never binds in practice.
+    /// `countLimit` must exceed a document's unique-table count or a full
+    /// restyle (load / theme / font change) re-measures every table; NSCache
+    /// still auto-evicts under memory pressure.
     static let tableLayoutCache: NSCache<NSString, TableLayout> = {
         let cache = NSCache<NSString, TableLayout>()
         cache.countLimit = 2048
@@ -251,7 +137,7 @@ extension MarkdownStyler {
 
     /// Latest layout key per table identity, so a render at a new width evicts
     /// the previous width's entry instead of leaving one per live-resize step.
-    /// Guarded by `themeKeyLock`, like `latestTableImageKeys`.
+    /// Guarded by `themeKeyLock` (parallel test runs measure off the main thread).
     private static var latestTableLayoutKeys: [String: NSString] = [:]
 
     /// True when a table's source can contain inline LaTeX, i.e. anything a
@@ -270,7 +156,7 @@ extension MarkdownStyler {
 
     /// Cache key prefix for a measured layout.
     ///
-    /// Built from the same resolved-sRGB fingerprints the bitmap key uses, but
+    /// Built from resolved-sRGB fingerprints (`colorKey`), but
     /// for BOTH appearances at once: two themes differ exactly when they differ
     /// under at least one appearance, so the result identifies the theme
     /// without tying the entry to the appearance that happened to be current.
@@ -279,8 +165,7 @@ extension MarkdownStyler {
     ///
     /// Resolved components rather than `ObjectIdentifier`: NSColor addresses are
     /// reused after release, so instance identity can collide across two themes
-    /// built in sequence. The bitmap key made the same call, for the same
-    /// reason (`colorKey`, and `sameNamedDynamicColorsDoNotCollide`).
+    /// built in sequence (`colorKey`, and `sameNamedDynamicColorsDoNotCollide`).
     private static func layoutKeyPrefix(ctx: StylingContext, source: String) -> String {
         var prefix = ""
         for name in [NSAppearance.Name.aqua, .darkAqua] {
@@ -356,7 +241,6 @@ extension MarkdownStyler {
         }
         var skippedCount = 0
         var wideCount = 0
-        var rasterizedCount = 0
         var metaNanos: UInt64 = 0
         for (idx, token) in tableIndexed {
             tableCount += 1
@@ -402,47 +286,21 @@ extension MarkdownStyler {
             // (occurrence bookkeeping above already ran, keeping IDs stable).
             if ctx.outsideScope(token.range) { continue }
 
-            // See renderTable: resolve table colors under the text view's real appearance.
-            let renderAppearance = ctx.layoutBridge?.firstTextContainer?.textView?.effectiveAppearance
-                ?? NSApp.effectiveAppearance
-            // Cells wrap to the container width (Obsidian-style); the render
+            // Cells wrap to the container width (Obsidian-style); the layout
             // only exceeds it when the per-column floors genuinely don't fit,
-            // in which case the scrollable overlay below takes over.
+            // in which case the fragment draws it clipped to the column and
+            // shifted by the offset the text view keeps for it. No pixels on
+            // either path.
             let containerWidth = effectiveTableWidth(for: ctx)
-            var image: NSImage?
-            var layout: TableLayout?
-            let naturalSize: CGSize
-            let isWide: Bool
-            if ctx.drawsTablesAsText {
-                let (measuredLayout, measured) = tableLayout(
-                    for: source,
-                    parsed: parsed,
-                    ctx: ctx,
-                    availableWidth: containerWidth
-                )
-                if measured { renderedCount += 1 }
-                naturalSize = measuredLayout.size
-                isWide = naturalSize.width > containerWidth + 0.5
-                layout = measuredLayout
-                // No pixels on this path, wide or narrow: the fragment draws a
-                // wide table clipped to its column and shifted by the offset the
-                // text view keeps for it. Evict unconditionally — a table that
-                // was rasterized before this build, or under the bitmap switch,
-                // would otherwise keep its image for the rest of the session.
-                evictTableImage(for: source, ctx: ctx, appearance: renderAppearance)
-            } else {
-                let (renderedImage, rendered) = tableImage(
-                    for: source,
-                    parsed: parsed,
-                    ctx: ctx,
-                    appearance: renderAppearance,
-                    availableWidth: containerWidth
-                )
-                if rendered { rasterizedCount += 1 }
-                image = renderedImage
-                naturalSize = renderedImage.size
-                isWide = naturalSize.width > containerWidth + 0.5
-            }
+            let (layout, measured) = tableLayout(
+                for: source,
+                parsed: parsed,
+                ctx: ctx,
+                availableWidth: containerWidth
+            )
+            if measured { renderedCount += 1 }
+            let naturalSize = layout.size
+            let isWide = naturalSize.width > containerWidth + 0.5
             let imageBounds = CGRect(x: 0, y: 0, width: naturalSize.width, height: naturalSize.height)
             if isWide { wideCount += 1 }
             let computedSourceID = stableTableSourceID(
@@ -459,7 +317,7 @@ extension MarkdownStyler {
             _ = appendRenderedStandaloneBlock(
                 for: token,
                 rawContent: source,
-                image: image,
+                image: nil,
                 imageBounds: imageBounds,
                 tableLayout: layout,
                 paragraphSpacingBefore: ctx.baseDefaultLineHeight * 0.5,
@@ -474,7 +332,7 @@ extension MarkdownStyler {
         if tableCount > 0 {
             let ms = Double(DispatchTime.now().uptimeNanoseconds - tablesT0) / 1_000_000
             let metaMs = Double(metaNanos) / 1_000_000
-            PerfTrace.note { "styleTables width=\(Int(effectiveContainerWidth(for: ctx))) wide=\(wideCount) scanned=\(tableCount) tables (skipped=\(skippedCount)), measured=\(renderedCount) layout, rasterized=\(rasterizedCount) NSImage in \(String(format: "%.2f", ms))ms (substring+meta=\(String(format: "%.2f", metaMs))ms)" }
+            PerfTrace.note { "styleTables width=\(Int(effectiveContainerWidth(for: ctx))) wide=\(wideCount) scanned=\(tableCount) tables (skipped=\(skippedCount)), measured=\(renderedCount) layout in \(String(format: "%.2f", ms))ms (substring+meta=\(String(format: "%.2f", metaMs))ms)" }
         }
         return attrs
     }
@@ -809,7 +667,7 @@ extension MarkdownStyler {
         //   distributed proportionally to each column's (max − min) stretch;
         // - even the minimums don't fit (many-column tables) → columns stay at
         //   their minimums, the table renders wider than the container, and
-        //   the horizontal-scroll overlay takes over as before.
+        //   the fragment draws it clipped to the column and scrolls it.
         let chrome = CGFloat(columnCount) * 2 * cellHPadding
             + CGFloat(columnCount + 1) * borderWidth
         let contentAvailable = availableWidth - chrome
@@ -880,75 +738,6 @@ extension MarkdownStyler {
         )
     }
 
-    /// Legacy bitmap path, kept behind `drawsTablesAsText` until the text path
-    /// has replaced every consumer (selection, accessibility, in-cell editing).
-    /// It now measures through `measureTable` and draws through `TableLayout`,
-    /// so the two paths cannot drift apart while both exist.
-    private static func renderTable(
-        _ table: ParsedTable,
-        baseFont: NSFont,
-        theme: MarkdownEditorTheme,
-        codeBackgroundColor: NSColor,
-        latex: any LatexRenderer,
-        appearance: NSAppearance,
-        availableWidth: CGFloat,
-        extensions: [any MarkdownExtension] = []
-    ) -> NSImage {
-        let layout = measureTable(
-            table,
-            baseFont: baseFont,
-            theme: theme,
-            codeBackgroundColor: codeBackgroundColor,
-            latex: latex,
-            availableWidth: availableWidth,
-            extensions: extensions
-        )
-        return bitmapImage(size: layout.size, appearance: appearance) {
-            layout.draw(at: .zero)
-        }
-    }
-
-    /// Rasterizes `draw` into an 8-bit RGBA `CGImage` at `tableBitmapScale` and
-    /// wraps it in an `NSImage` of `size` points.
-    ///
-    /// A drawing-handler `NSImage` would let AppKit snapshot the table into a
-    /// bitmap in the window's own format — on wide-gamut displays that is 16-bit
-    /// float, 8 bytes per pixel. Tables are anti-aliased text and a few flat
-    /// colors; 8 bits per channel is enough and halves the memory. The bitmap is
-    /// CG-owned (not an `NSBitmapImageRep` buffer) so the wide-table overlays'
-    /// layers can share it with the render server instead of copying it. The
-    /// context is flipped so the top-down cell offsets draw directly and text
-    /// stays upright. `appearance` resolves the dynamic colors while drawing.
-    static func bitmapImage(size: NSSize, appearance: NSAppearance, draw: () -> Void) -> NSImage {
-        let scale = tableBitmapScale
-        let pixelsWide = max(1, Int((size.width * scale).rounded(.up)))
-        let pixelsHigh = max(1, Int((size.height * scale).rounded(.up)))
-        let image = NSImage(size: size)
-        guard let cgContext = CGContext(
-            data: nil,
-            width: pixelsWide,
-            height: pixelsHigh,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-        ) else {
-            return image
-        }
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: cgContext, flipped: true)
-        cgContext.translateBy(x: 0, y: CGFloat(pixelsHigh))
-        cgContext.scaleBy(x: scale, y: -scale)
-        // The bitmap is rendered ahead of display, so dynamic colors (text, code
-        // background) must resolve under the text view's appearance here, not
-        // under whatever is current when the image is later drawn.
-        appearance.performAsCurrentDrawingAppearance { draw() }
-        NSGraphicsContext.restoreGraphicsState()
-        guard let cgImage = cgContext.makeImage() else { return image }
-        image.addRepresentation(NSBitmapImageRep(cgImage: cgImage).withSize(size))
-        return image
-    }
-
     // MARK: - Scrollable table helpers
 
     /// Container width with fallback chain for "styler runs before layout" case.
@@ -992,12 +781,5 @@ extension MarkdownStyler {
         hasher.combine(source)
         hasher.combine(occurrenceIndex)
         return hasher.finalize()
-    }
-}
-
-private extension NSBitmapImageRep {
-    func withSize(_ size: NSSize) -> NSBitmapImageRep {
-        self.size = size
-        return self
     }
 }

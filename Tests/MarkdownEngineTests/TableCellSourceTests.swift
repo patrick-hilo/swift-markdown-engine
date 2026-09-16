@@ -60,10 +60,9 @@ struct TableCellSourceTests {
                 configuration: .default, wikiLinkIDProvider: { _ in nil }
             )
             ctx.scopeBounds = nil
-            let aqua = try #require(NSAppearance(named: .aqua))
-            return MarkdownStyler.tableImage(
-                for: source, parsed: parsed, ctx: ctx, appearance: aqua, availableWidth: 650
-            ).image.size.height
+            return MarkdownStyler.tableLayout(
+                for: source, parsed: parsed, ctx: ctx, availableWidth: 650
+            ).layout.size.height
         }
         let flat = try height("| A | B |\n|---|---|\n| one | two |")
         let broken = try height("| A | B |\n|---|---|\n| one | two<br>three |")

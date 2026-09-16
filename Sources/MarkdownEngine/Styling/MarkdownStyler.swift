@@ -53,16 +53,6 @@ extension MarkdownStyler {
         /// Pre-classified per-kind token arrays; nil for direct callers (tests),
         /// which fall back to classifying `tokens` on demand.
         var classified: ClassifiedStyleTokens? = nil
-        /// Draw tables as text from a measured `TableLayout` instead of
-        /// rasterizing them into a cached bitmap.
-        ///
-        /// Per context rather than process-global: a test that needs the old
-        /// path must not change what another test measures, and the styler
-        /// already runs off the main thread. The default comes from the
-        /// environment so a comparison build can be measured without a code
-        /// change; nothing writes it at runtime.
-        var drawsTablesAsText: Bool = MarkdownStyler.drawsTablesAsTextByDefault
-
         var services: MarkdownEditorServices { configuration.services }
 
         // Per-kind indexed arrays: the cached classification, or a one-off
@@ -467,9 +457,8 @@ extension MarkdownStyler {
             .font: ctx.latexMarkerFont,
             .kern: advanceWidth - HeadingHelpers.textWidth(anchorChar, font: ctx.latexMarkerFont)
         ]
-        // Exactly one visual per anchor: a rasterized image (LaTeX, embeds, and
-        // tables while the bitmap path is switched on) or a measured table
-        // layout the fragment draws as text.
+        // Exactly one visual per anchor: a rasterized image (LaTeX, embeds) or
+        // a measured table layout the fragment draws as text.
         if let image { anchorAttrs[.latexImage] = image }
         if let tableLayout { anchorAttrs[.tableLayout] = tableLayout }
         for (key, value) in extraAnchorAttrs { anchorAttrs[key] = value }
