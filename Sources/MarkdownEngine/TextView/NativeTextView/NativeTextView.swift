@@ -76,8 +76,10 @@ final class NativeTextView: NSTextView {
     var tablePointer: TablePointer?
     var tableDragTimer: Timer?
     var tableDragWindowPoint: CGPoint?
-    var tableFindRanges: [NSRange] = []
-    var tableFindCurrent: NSRange?
+    /// The host's find matches in this view's string. Prose matches are painted
+    /// by the layout fragment, table matches through the rendered cell text.
+    var findRanges: [NSRange] = []
+    var findCurrent: NSRange?
     var tableCellEditor: TableCellEditor?
 
     // MARK: Wide-table scrolling

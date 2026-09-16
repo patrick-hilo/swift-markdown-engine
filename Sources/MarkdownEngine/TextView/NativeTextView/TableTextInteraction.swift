@@ -4,8 +4,12 @@ import AppKit
 @MainActor public protocol MarkdownTableTextAccess: AnyObject {
     func copySelectedTableText(to pasteboard: NSPasteboard) -> Bool
     func tableSearchResults(for query: String) -> (tables: [NSRange], matches: [NSRange])
-    func setTableFindHighlights(_ ranges: [NSRange], current: NSRange?)
-    func revealTableText(in range: NSRange) -> Bool
+    /// Marks the host's find matches, prose and table alike; `current` is drawn stronger.
+    func setFindHighlights(_ ranges: [NSRange], current: NSRange?)
+    /// Scrolls a rendered table sideways until `range` shows and returns the matched
+    /// text's rect in view coordinates, for the host to bring into the viewport the
+    /// way it reveals prose. `nil` when `range` is not inside a rendered table.
+    func revealTableText(in range: NSRange) -> CGRect?
 }
 
 struct TableTextSelection {
@@ -225,27 +229,27 @@ extension NativeTextView: MarkdownTableTextAccess {
         return (tables, matches)
     }
 
-    public func setTableFindHighlights(_ ranges: [NSRange], current: NSRange?) {
-        tableFindRanges = ranges; tableFindCurrent = current
+    public func setFindHighlights(_ ranges: [NSRange], current: NSRange?) {
+        findRanges = ranges; findCurrent = current
         invalidateFragmentSurface(in: visibleRect)
     }
 
-    public func revealTableText(in range: NSRange) -> Bool {
+    public func revealTableText(in range: NSRange) -> CGRect? {
         guard !configuration.rawSourceMode, range.location != NSNotFound, range.length > 0,
               let coordinator = delegate as? NativeTextViewCoordinator,
-              let parsed = coordinator.cachedParsedDocument else { return false }
+              let parsed = coordinator.cachedParsedDocument else { return nil }
         let nearby = MarkdownStyler.scopedSlice(parsed.classified.table, lo: range.location, hi: NSMaxRange(range) + 1)
-        guard let token = nearby.first(where: { NSIntersectionRange($0.1.range, range).length > 0 })?.1 else { return false }
+        guard let token = nearby.first(where: { NSIntersectionRange($0.1.range, range).length > 0 })?.1 else { return nil }
         endTableCellEditing()
         ensureLayout(forCharacterRange: token.range)
-        guard let table = renderedTable(at: token.range.location) else { return false }
+        guard let table = renderedTable(at: token.range.location) else { return nil }
         let content = TableTextContent(table: table, source: (string as NSString).substring(with: table.range))
         let overlap = NSIntersectionRange(range, table.range)
         let local = NSRange(location: overlap.location - table.range.location, length: overlap.length)
         guard let target = content.cells.first(where: { !$0.projection.displayRanges(for: local).isEmpty }),
               let cellRect = table.layout.cellTextRect(row: target.row, column: target.column),
               let formatted = table.layout.cellText(row: target.row, column: target.column),
-              let displayRange = target.projection.displayRanges(for: local).first else { return false }
+              let displayRange = target.projection.displayRanges(for: local).first else { return nil }
         let geometry = TableCellTextGeometry(formatted, size: cellRect.size, alignment: table.layout.alignments[target.column])
         let rect = geometry.rect(for: displayRange).offsetBy(dx: cellRect.minX, dy: cellRect.minY)
         if let id = table.sourceID {
@@ -254,14 +258,13 @@ extension NativeTextView: MarkdownTableTextAccess {
             if rect.maxX > offset + table.viewport.width { offset = rect.maxX - table.viewport.width }
             tableHorizontalScrollOffsets[id] = max(0, min(offset, table.layout.size.width - table.viewport.width))
         }
-        scrollToVisible(CGRect(x: table.viewport.minX, y: table.viewport.minY + rect.minY, width: table.viewport.width, height: rect.height))
         invalidateFragmentSurface(in: table.viewport)
-        return true
+        return CGRect(x: table.viewport.minX, y: table.viewport.minY + rect.minY, width: table.viewport.width, height: rect.height)
     }
 
     func highlightedTableCell(_ cell: NSAttributedString, tableRange: NSRange, row: Int, column: Int) -> NSAttributedString {
         let hasSelection = tableCellEditor == nil && NSIntersectionRange(selectedRange(), tableRange).length > 0
-        guard hasSelection || tableFindRanges.contains(where: { NSIntersectionRange($0, tableRange).length > 0 }) else { return cell }
+        guard hasSelection || findRanges.contains(where: { NSIntersectionRange($0, tableRange).length > 0 }) else { return cell }
         guard NSMaxRange(tableRange) <= (string as NSString).length,
               let source = TableCellSource.cell(in: (string as NSString).substring(with: tableRange), row: row, column: column) else { return cell }
         let projection = TableCellProjection(source: source, formatted: cell)
@@ -271,9 +274,11 @@ extension NativeTextView: MarkdownTableTextAccess {
             let local = NSRange(location: max(0, range.location - tableRange.location), length: NSMaxRange(range) - max(range.location, tableRange.location))
             for mapped in projection.displayRanges(for: local) { output.addAttribute(.backgroundColor, value: color, range: mapped) }
         }
-        for range in tableFindRanges { highlight(range, color: configuration.theme.findMatchHighlight.withAlphaComponent(0.35)) }
-        if let current = tableFindCurrent { highlight(current, color: configuration.theme.findCurrentMatchHighlight) }
+        // The current match is also the selection while the host's find bar is open;
+        // the match color wins so a table hit looks like a prose hit.
         if tableCellEditor == nil, selectedRange().length > 0 { highlight(selectedRange(), color: .selectedTextBackgroundColor) }
+        for range in findRanges { highlight(range, color: configuration.theme.findMatchHighlight.withAlphaComponent(0.35)) }
+        if let current = findCurrent { highlight(current, color: configuration.theme.findCurrentMatchHighlight) }
         return output
     }
 }

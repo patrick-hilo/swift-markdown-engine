@@ -72,10 +72,10 @@ struct TableTextInteractionTests {
         }
         let before = try #require(draw())
         let hit = try #require(h.view.tableSearchResults(for: "old").matches.first)
-        h.view.setTableFindHighlights([hit], current: hit)
+        h.view.setFindHighlights([hit], current: hit)
         let after = try #require(draw())
         #expect(before != after)
-        h.view.setTableFindHighlights([], current: nil)
+        h.view.setFindHighlights([], current: nil)
         #expect(draw() == before)
     }
 
@@ -165,7 +165,7 @@ struct TableTextInteractionTests {
         let same = h.view.tableSearchResults(for: "same").matches
         #expect(same.count == 2)
         #expect(same[0].location != same[1].location)
-        h.view.setTableFindHighlights(results.matches, current: match)
+        h.view.setFindHighlights(results.matches, current: match)
         let table = try #require(h.view.renderedTable(at: h.tableStart))
         let cell = try #require(table.layout.cellText(row: 1, column: 0))
         let marked = h.view.highlightedTableCell(cell, tableRange: table.range, row: 1, column: 0)
@@ -196,7 +196,7 @@ struct TableTextInteractionTests {
         let h = try Harness(source)
         defer { h.close() }
         let hit = try #require(h.view.tableSearchResults(for: "value19").matches.first)
-        #expect(h.view.revealTableText(in: hit))
+        #expect(h.view.revealTableText(in: hit) != nil)
         let table = try #require(h.view.renderedTable(at: h.tableStart))
         #expect(table.offset > 0)
         let start = try point(table, row: 1, column: 19)

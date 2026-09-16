@@ -104,6 +104,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         for fill in blockBackgroundFills(at: .zero) {
             bounds = bounds.union(fill.rect)
         }
+        // Find bubbles reach a little past their glyphs.
+        for fill in findHighlightFills(at: .zero) {
+            bounds = bounds.union(Self.findBubble(fill.rect).bounds)
+        }
         return bounds
     }
 
@@ -115,6 +119,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
         // 1b. Line-box fills (`==highlight==` and friends), behind text
         drawBlockBackgrounds(at: point, in: context)
+
+        // 1c. Find matches, behind text: every match softly, the current one stronger
+        drawFindHighlights(at: point, in: context)
 
         // 2. LaTeX images (behind text — hidden markers are invisible anyway)
         drawLatexImages(at: point, in: context)
@@ -354,31 +361,97 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         var fills: [(rect: CGRect, color: NSColor)] = []
         ts.enumerateAttribute(.markdownBlockBackground, in: range, options: []) { value, attrRange, _ in
             guard let color = value as? NSColor else { return }
-            let local = NSRange(location: attrRange.location - range.location, length: attrRange.length)
-            for lineFragment in textLineFragments {
-                let lineRange = lineFragment.characterRange
-                let hit = NSIntersectionRange(lineRange, local)
-                guard hit.length > 0 else { continue }
-                let tb = lineFragment.typographicBounds
-                let startX = lineFragment.locationForCharacter(at: hit.location).x
-                // A run reaching the line's end fills to the line's own width:
-                // the index one past the line belongs to the next fragment, and
-                // asking this one for it is undefined.
-                let reachesEnd = hit.location + hit.length >= lineRange.location + lineRange.length
-                let endX = reachesEnd
-                    ? tb.width
-                    : lineFragment.locationForCharacter(at: hit.location + hit.length).x
-                guard endX > startX else { continue }
-                fills.append((
-                    rect: CGRect(x: point.x + tb.origin.x + startX,
-                                 y: point.y + tb.origin.y,
-                                 width: endX - startX,
-                                 height: tb.height),
-                    color: color
-                ))
+            for rect in lineRects(forDocumentRange: attrRange, at: point) {
+                fills.append((rect: rect, color: color))
             }
         }
         return fills
+    }
+
+    /// One rect per line fragment `docRange` touches, spanning the line's full
+    /// typographic height, relative to `point`.
+    private func lineRects(forDocumentRange docRange: NSRange, at point: CGPoint) -> [CGRect] {
+        guard let range = fragmentNSRange else { return [] }
+        let local = NSRange(location: docRange.location - range.location, length: docRange.length)
+        var rects: [CGRect] = []
+        for lineFragment in textLineFragments {
+            let lineRange = lineFragment.characterRange
+            let hit = NSIntersectionRange(lineRange, local)
+            guard hit.length > 0 else { continue }
+            let tb = lineFragment.typographicBounds
+            let startX = lineFragment.locationForCharacter(at: hit.location).x
+            // A run reaching the line's end fills to the line's own width:
+            // the index one past the line belongs to the next fragment, and
+            // asking this one for it is undefined.
+            let reachesEnd = hit.location + hit.length >= lineRange.location + lineRange.length
+            let endX = reachesEnd
+                ? tb.width
+                : lineFragment.locationForCharacter(at: hit.location + hit.length).x
+            guard endX > startX else { continue }
+            rects.append(CGRect(x: point.x + tb.origin.x + startX,
+                                y: point.y + tb.origin.y,
+                                width: endX - startX,
+                                height: tb.height))
+        }
+        return rects
+    }
+
+    // MARK: - Find Highlights
+
+    /// Fill rects for the text view's find matches in this fragment, one per
+    /// line a match touches, relative to `point`. A rendered table is one
+    /// fragment whose source is collapsed behind the drawn cells, so its matches
+    /// are painted through the cell text (`highlightedTableCell`) and skipped here.
+    func findHighlightFills(at point: CGPoint) -> [(rect: CGRect, isCurrent: Bool)] {
+        guard let view = textLayoutManager?.textContainer?.textView as? NativeTextView,
+              !view.findRanges.isEmpty,
+              let ts = textStorage, let range = fragmentNSRange, range.length > 0 else { return [] }
+        var hasTable = false
+        ts.enumerateAttribute(.tableLayout, in: range, options: []) { value, _, stop in
+            if value is TableLayout { hasTable = true; stop.pointee = true }
+        }
+        guard !hasTable else { return [] }
+        var fills: [(rect: CGRect, isCurrent: Bool)] = []
+        for match in view.findRanges {
+            let hit = NSIntersectionRange(match, range)
+            guard hit.length > 0 else { continue }
+            let isCurrent = view.findCurrent == match
+            for rect in lineRects(forDocumentRange: hit, at: point) {
+                fills.append((rect: rect, isCurrent: isCurrent))
+            }
+        }
+        return fills
+    }
+
+    /// The bubble drawn for one find fill: a hair wider than the glyphs, rounded.
+    static func findBubble(_ rect: CGRect) -> NSBezierPath {
+        NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: 0), xRadius: 2, yRadius: 2)
+    }
+
+    private func drawFindHighlights(at point: CGPoint, in context: CGContext) {
+        let fills = findHighlightFills(at: point)
+        guard !fills.isEmpty,
+              let theme = (textLayoutManager?.textContainer?.textView as? NativeTextView)?.configuration.theme else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: true)
+
+        // Other matches share the table cells' alpha; the current one is drawn
+        // as the theme gives it and gets a solid outline so it stands out from
+        // the others even where the theme's fill is translucent.
+        for fill in fills where !fill.isCurrent {
+            theme.findMatchHighlight.withAlphaComponent(0.35).setFill()
+            Self.findBubble(fill.rect).fill()
+        }
+        for fill in fills where fill.isCurrent {
+            let bubble = Self.findBubble(fill.rect)
+            theme.findCurrentMatchHighlight.setFill()
+            bubble.fill()
+            theme.findCurrentMatchHighlight.withAlphaComponent(1).setStroke()
+            bubble.lineWidth = 1
+            bubble.stroke()
+        }
     }
 
     private func drawBlockBackgrounds(at point: CGPoint, in context: CGContext) {

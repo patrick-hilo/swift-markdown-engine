@@ -494,7 +494,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         if rawSourceModeChanged {
             textView.cancelTableTextPointer()
             textView.tableTextSelection = nil
-            textView.setTableFindHighlights([], current: nil)
+            textView.setFindHighlights([], current: nil)
             context.coordinator.configuration.rawSourceMode = configuration.rawSourceMode
             textView.configuration.rawSourceMode = configuration.rawSourceMode
             textView.breakUndoCoalescing()
