@@ -81,6 +81,10 @@ final class NativeTextView: NSTextView {
     var findRanges: [NSRange] = []
     var findCurrent: NSRange?
     var tableCellEditor: TableCellEditor?
+    /// The accessibility tree of each visible table, keyed by the table's
+    /// location, owned here because VoiceOver refers to elements by identity
+    /// (see `NativeTextView+TableAccessibility`).
+    var tableAccessibilityTables: [Int: TableAccessibilityElement] = [:]
 
     // MARK: Wide-table scrolling
     /// Horizontal scroll offset per wide table, keyed by source-ID hash.
