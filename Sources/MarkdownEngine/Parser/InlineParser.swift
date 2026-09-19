@@ -368,7 +368,8 @@ enum InlineParser {
                     guard !label.isEmpty, !label.contains(where: { $0.isWhitespace || "[]\\".contains($0) }),
                           peek(ns, k + close.count, len) != 0x3A,
                           peek(ns, i - 1, len) != bang,
-                          peek(ns, i - 1, len) != lbracket else { return nil }
+                          peek(ns, i - 1, len) != lbracket,
+                          peek(ns, i - 1, len) != rbracket else { return nil }
                 }
                 return .ext(
                     id: entry.id,
@@ -739,8 +740,10 @@ enum InlineParser {
                                         children: buildTree(region: content, ordered: ordered,
                                                             cursor: &cursor, ns: ns, registry: registry)))
             case .link(let range, let textRange, let url, let markers):
+                var labelRegistry = registry
+                labelRegistry.footnoteExcludedRanges.append(textRange)
                 result.append(.link(range: range, textRange: textRange, url: url, markers: markers,
-                                     children: reparse(textRange, ns: ns, registry: registry)))
+                                     children: reparse(textRange, ns: ns, registry: labelRegistry)))
             case .image(let range, let alt, let url, let markers):
                 result.append(.image(range: range, alt: alt, url: url, markers: markers))
             case .wikiLink(let range, let name, let id, let markers):

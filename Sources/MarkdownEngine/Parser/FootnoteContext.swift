@@ -3,6 +3,7 @@ import Foundation
 /// Conservative source regions in which a bracket-caret sequence is literal.
 enum FootnoteContext {
     static func protectedRanges(in source: NSString) -> [NSRange] {
+        guard source.range(of: "[^", options: .literal).location != NSNotFound else { return [] }
         var ranges: [NSRange] = []
         var offset = 0
         var frontmatter = false
@@ -27,9 +28,8 @@ enum FootnoteContext {
             }
             offset = NSMaxRange(range)
         }
-        // Raw tags/comments and Markdown links/images remain opaque to footnotes,
-        // including link labels recursively parsed by the inline parser.
-        for pattern in ["<!--(?s:.*?)-->", "<[^>]*>", "!?\\[[^\\n]*?\\]\\([^\\n]*?\\)"] {
+        // Raw tags/comments remain opaque to footnotes.
+        for pattern in ["<!--(?s:.*?)-->", "<[^>]*>"] {
             if let regex = try? NSRegularExpression(pattern: pattern) {
                 ranges += regex.matches(in: source as String, range: NSRange(location: 0, length: source.length)).map(\.range)
             }
