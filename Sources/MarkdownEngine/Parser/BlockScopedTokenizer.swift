@@ -93,9 +93,8 @@ extension MarkdownTokenizer {
         var registry = registry
         if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
             let oldSource = String(utf16CodeUnits: o, count: o.count) as NSString
-            let oldProtected = FootnoteContext.protectedRanges(in: oldSource)
+            if FootnoteContext.protectionChanged(old: oldSource, new: ns, diff: diff) { return nil }
             registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
-            if oldProtected != registry.footnoteExcludedRanges { return nil }
         }
         let oldLen = o.count, newLen = n.count
         guard oldLen > 0, newLen > 0, !blocks.isEmpty else { return nil }

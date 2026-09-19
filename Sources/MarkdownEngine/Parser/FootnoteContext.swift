@@ -2,6 +2,19 @@ import Foundation
 
 /// Conservative source regions in which a bracket-caret sequence is literal.
 enum FootnoteContext {
+    static func protectionChanged(old: NSString, new: NSString, diff: BufferDiff) -> Bool {
+        let previous = protectedRanges(in: old).map { range -> NSRange in
+            func shifted(_ position: Int) -> Int {
+                if position <= diff.changeStart { return position }
+                if position >= diff.changeEndOld { return position + diff.delta }
+                return diff.changeEndNew
+            }
+            let start = shifted(range.location)
+            return NSRange(location: start, length: max(0, shifted(NSMaxRange(range)) - start))
+        }
+        return previous != protectedRanges(in: new)
+    }
+
     static func protectedRanges(in source: NSString) -> [NSRange] {
         guard source.range(of: "[^", options: .literal).location != NSNotFound else { return [] }
         var ranges: [NSRange] = []
@@ -9,10 +22,30 @@ enum FootnoteContext {
         var frontmatter = false
         var htmlBlock = false
         var definition = false
+        var fence: Character?
+        var fenceLength = 0
         while offset < source.length {
             let range = source.lineRange(for: NSRange(location: offset, length: 0))
             let line = source.substring(with: range).trimmingCharacters(in: .newlines)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let activeFence = fence {
+                ranges.append(range)
+                if trimmed.prefix(while: { $0 == activeFence }).count >= fenceLength {
+                    fence = nil
+                }
+                offset = NSMaxRange(range)
+                continue
+            }
+            if !frontmatter, let marker = trimmed.first, marker == "`" || marker == "~" || marker == "$" {
+                let count = trimmed.prefix(while: { $0 == marker }).count
+                if count >= (marker == "$" ? 2 : 3) {
+                    fence = marker
+                    fenceLength = count
+                    ranges.append(range)
+                    offset = NSMaxRange(range)
+                    continue
+                }
+            }
             if offset == 0, line == "---" { frontmatter = true }
             if frontmatter {
                 ranges.append(range)
@@ -20,7 +53,7 @@ enum FootnoteContext {
             } else {
                 if trimmed.hasPrefix("<") { htmlBlock = true }
                 if trimmed.isEmpty { htmlBlock = false }
-                if trimmed.hasPrefix("[^"), trimmed.contains("]:") { definition = true }
+                if trimmed.hasPrefix("["), trimmed.contains("]:") { definition = true }
                 else if !trimmed.isEmpty, !line.hasPrefix("    "), !line.hasPrefix("\t") { definition = false }
                 if htmlBlock || definition || line.hasPrefix("    ") || line.hasPrefix("\t") {
                     ranges.append(range)

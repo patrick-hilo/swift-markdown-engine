@@ -32,8 +32,9 @@ import Foundation
 ///   the match (the candidate stays literal) — `==a=b==` is not a span.
 /// * A newline before the close aborts the match (spans are single-line).
 public struct InlineSyntax: Sendable, Equatable {
-    /// Opening delimiter, e.g. `"=="`.
+    /// Restrict this span to footnote identifiers in unprotected prose.
     public var isFootnoteReference: Bool
+    /// Opening delimiter, e.g. `"=="`.
     public var open: String
     /// Closing delimiter, e.g. `"=="`.
     public var close: String

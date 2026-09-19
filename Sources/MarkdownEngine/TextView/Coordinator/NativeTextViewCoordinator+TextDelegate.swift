@@ -270,7 +270,7 @@ extension NativeTextViewCoordinator {
         let extFenceStructureChanged = pendingExtFenceTouched
             || editWindowTouchesExtensionFence(in: fullText, around: safeEditedRange)
         pendingExtFenceTouched = false
-        if codeBlockStructureChanged || extFenceStructureChanged {
+        if codeBlockStructureChanged || extFenceStructureChanged || parseState.footnoteContextChanged {
             effectiveParagraphCandidates = [NSRange(location: 0, length: fullText.length)]
         }
         // Chunks a staged open still has to style move with this edit.
@@ -280,7 +280,7 @@ extension NativeTextViewCoordinator {
             trusted: singleTrackedEdit,
             blocks: parsed.blocks,
             length: fullLength,
-            wholeDocumentRestyled: codeBlockStructureChanged || extFenceStructureChanged
+            wholeDocumentRestyled: codeBlockStructureChanged || extFenceStructureChanged || parseState.footnoteContextChanged
         )
         // Restyle only latex/imageEmbed paragraphs the EDIT touches (mirrors the
         // table loop below); the caret entering/leaving a formula, which flips

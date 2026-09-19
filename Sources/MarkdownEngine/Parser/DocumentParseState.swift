@@ -27,6 +27,7 @@ final class DocumentParseState {
     private var blocks: [Block] = []
     private var tokens: [MarkdownToken] = []
     private var valid = false
+    private(set) var footnoteContextChanged = false
     /// Registry fingerprint the stored tokens were computed under; a change
     /// (extension registered/unregistered at runtime) invalidates the splice
     /// base — old tokens must not be reused under a new grammar.
@@ -109,6 +110,12 @@ final class DocumentParseState {
             }
         }
 
+        footnoteContextChanged = false
+        if wasValid, let diff, registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
+            footnoteContextChanged = FootnoteContext.protectionChanged(
+                old: String(utf16CodeUnits: prevChars, count: prevChars.count) as NSString,
+                new: ns, diff: diff)
+        }
         let tBuffer = DispatchTime.now().uptimeNanoseconds
 
         // 2. Blocks: window splice on the shared diff, full reparse fallback.

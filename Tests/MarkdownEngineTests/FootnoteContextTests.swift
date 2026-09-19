@@ -56,3 +56,41 @@ struct FootnoteContextTests {
         }
     }
 }
+
+extension FootnoteContextTests {
+    @Test func otherProtectedBlocks() {
+        let source = """
+        [link]: path "[^title]"
+
+        ~~~
+        [^tilde]
+        ~~~
+
+        $$
+        [^math]
+        $$
+
+        Text <!-- unfinished [^comment]
+        """
+        let registry = ExtensionRegistry(extensions: [Footnote()])
+        #expect(!MarkdownTokenizer.parseTokensViaAST(in: source, registry: registry).contains {
+            $0.kind == .extensionSpan("test.footnote")
+        })
+        #expect(!MarkdownHTMLRenderer.html(from: source, extensions: [Footnote()]).contains("<sup>"))
+    }
+
+    @Test func nestedLinkAndImageLabelsRemainWholeConstructs() {
+        for source in ["[a [nested] label](target)", "[a `]` label](target)", #"[a \] label](target)"#, "![a [nested] label](image.png)"] {
+            let nodes = InlineParser.parse(source)
+            #expect(nodes.count == 1)
+            switch nodes.first {
+            case .link, .image: break
+            default: Issue.record("Label was split: \(source)")
+            }
+        }
+        #expect(MarkdownHTMLRenderer.html(from: "[a [nested] label](target)").contains("href=\"target\""))
+        #expect(!MarkdownHTMLRenderer.html(from: "[outer [inner](one)](two)").contains("href=\"two\""))
+        let malformed = "[a [nested] label(target)"
+        #expect(!InlineParser.parse(malformed).contains { if case .link = $0 { return true }; return false })
+    }
+}

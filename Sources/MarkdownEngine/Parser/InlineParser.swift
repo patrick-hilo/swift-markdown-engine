@@ -437,7 +437,7 @@ enum InlineParser {
     /// `![ alt ]( url )`
     private static func matchImage(_ ns: NSString, _ len: Int, start i: Int) -> Span? {
         let altStart = i + 2
-        guard let closeBracket = findChar(ns, len, from: altStart, char: rbracket),
+        guard let closeBracket = closingLabelBracket(ns, len, from: altStart),
               peek(ns, closeBracket + 1, len) == lparen,
               let closeParen = balancedParen(ns, len, from: closeBracket + 2) else { return nil }
         let urlStart = closeBracket + 2
@@ -458,7 +458,7 @@ enum InlineParser {
     /// `[ text ]( url )`
     private static func matchLink(_ ns: NSString, _ len: Int, start i: Int) -> Span? {
         let textStart = i + 1
-        guard let closeBracket = findChar(ns, len, from: textStart, char: rbracket),
+        guard let closeBracket = closingLabelBracket(ns, len, from: textStart, rejectsNestedLinks: true),
               closeBracket > textStart,
               peek(ns, closeBracket + 1, len) == lparen,
               let closeParen = balancedParen(ns, len, from: closeBracket + 2) else { return nil }
@@ -507,6 +507,32 @@ enum InlineParser {
             if ch == newline { return nil }
             if ch == rbracket { return peek(ns, k + 1, len) == rbracket ? k : nil }
             k += 1
+        }
+        return nil
+    }
+
+    private static func closingLabelBracket(_ ns: NSString, _ len: Int, from start: Int, rejectsNestedLinks: Bool = false) -> Int? {
+        var depth = 0
+        var i = start
+        while i < len {
+            let ch = ns.character(at: i)
+            if ch == newline { return nil }
+            if ch == backslash { i += 2; continue }
+            if ch == backtick {
+                var end = i + 1
+                while end < len, ns.character(at: end) == backtick { end += 1 }
+                if let close = closingBacktickRun(in: ns, from: end, length: len, runLen: end - i) {
+                    i = close + end - i
+                    continue
+                }
+            }
+            if ch == lbracket { depth += 1 }
+            if ch == rbracket {
+                if depth == 0 { return i }
+                if rejectsNestedLinks, peek(ns, i + 1, len) == lparen { return nil }
+                depth -= 1
+            }
+            i += 1
         }
         return nil
     }
