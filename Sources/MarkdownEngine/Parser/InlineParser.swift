@@ -512,7 +512,7 @@ enum InlineParser {
     }
 
     private static func closingLabelBracket(_ ns: NSString, _ len: Int, from start: Int, rejectsNestedLinks: Bool = false) -> Int? {
-        var depth = 0
+        var openBrackets: [Int] = []
         var i = start
         while i < len {
             let ch = ns.character(at: i)
@@ -526,11 +526,11 @@ enum InlineParser {
                     continue
                 }
             }
-            if ch == lbracket { depth += 1 }
+            if ch == lbracket { openBrackets.append(i) }
             if ch == rbracket {
-                if depth == 0 { return i }
-                if rejectsNestedLinks, peek(ns, i + 1, len) == lparen { return nil }
-                depth -= 1
+                guard let opener = openBrackets.popLast() else { return i }
+                let isImage = opener > start && ns.character(at: opener - 1) == bang && !isEscaped(opener - 1, ns)
+                if rejectsNestedLinks, !isImage, peek(ns, i + 1, len) == lparen { return nil }
             }
             i += 1
         }
@@ -767,7 +767,7 @@ enum InlineParser {
                                                             cursor: &cursor, ns: ns, registry: registry)))
             case .link(let range, let textRange, let url, let markers):
                 var labelRegistry = registry
-                labelRegistry.footnoteExcludedRanges.append(textRange)
+                labelRegistry.footnoteExcludedRanges = [textRange]
                 result.append(.link(range: range, textRange: textRange, url: url, markers: markers,
                                      children: reparse(textRange, ns: ns, registry: labelRegistry)))
             case .image(let range, let alt, let url, let markers):

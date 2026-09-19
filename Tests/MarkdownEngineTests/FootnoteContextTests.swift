@@ -104,3 +104,25 @@ extension FootnoteContextTests {
         #expect(!InlineParser.parse(malformed).contains { if case .link = $0 { return true }; return false })
     }
 }
+
+extension FootnoteContextTests {
+    @Test func inlineHTMLAndAutolinksDoNotProtectFollowingProse() {
+        let source = "<https://example.com> prose[^n]\n<em>x</em> prose[^m]\n"
+        let html = MarkdownHTMLRenderer.html(from: source, extensions: [Footnote()])
+        #expect(html.contains("<sup>n</sup>"))
+        #expect(html.contains("<sup>m</sup>"))
+    }
+
+    @Test func fenceInfoDoesNotCloseCodeAndLinkedImagesStayLinks() {
+        let source = "```\n[^a]\n```not-a-close\n[^b]\n```\n\nProse[^c]\n"
+        let tokens = MarkdownTokenizer.parseTokensViaAST(in: source, registry: ExtensionRegistry(extensions: [Footnote()]))
+        let references = tokens.filter { $0.kind == .extensionSpan("test.footnote") }
+        #expect(references.map { (source as NSString).substring(with: $0.contentRange) } == ["c"])
+        let linkedImage = "[![alt](image.png)](target)"
+        guard case .link(let range, _, _, _, _) = InlineParser.parse(linkedImage).first else {
+            Issue.record("Linked image lost outer link"); return
+        }
+        #expect(range == NSRange(location: 0, length: linkedImage.utf16.count))
+        #expect(MarkdownHTMLRenderer.html(from: linkedImage).contains("href=\"target\""))
+    }
+}

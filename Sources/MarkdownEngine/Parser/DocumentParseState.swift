@@ -28,6 +28,7 @@ final class DocumentParseState {
     private var tokens: [MarkdownToken] = []
     private var valid = false
     private(set) var footnoteContextChanged = false
+    private var footnoteProtectedRanges: [NSRange] = []
     /// Registry fingerprint the stored tokens were computed under; a change
     /// (extension registered/unregistered at runtime) invalidates the splice
     /// base — old tokens must not be reused under a new grammar.
@@ -64,6 +65,7 @@ final class DocumentParseState {
         let prevChars = chars
         let prevBlocks = blocks
         let prevTokens = tokens
+        let previousProtectedRanges = footnoteProtectedRanges
         let wasValid = valid && fingerprint == registry.fingerprint
         lock.unlock()
 
@@ -110,12 +112,11 @@ final class DocumentParseState {
             }
         }
 
-        footnoteContextChanged = false
-        if wasValid, let diff, registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
-            footnoteContextChanged = FootnoteContext.protectionChanged(
-                old: String(utf16CodeUnits: prevChars, count: prevChars.count) as NSString,
-                new: ns, diff: diff)
-        }
+        var registry = registry.preparingFootnoteContext(in: ns)
+        footnoteContextChanged = wasValid && diff.map {
+            FootnoteContext.protectionChanged(old: previousProtectedRanges, new: registry.footnoteExcludedRanges, diff: $0)
+        } == true
+        registry.footnoteContextChanged = footnoteContextChanged
         let tBuffer = DispatchTime.now().uptimeNanoseconds
 
         // 2. Blocks: window splice on the shared diff, full reparse fallback.
@@ -150,6 +151,7 @@ final class DocumentParseState {
         chars = newChars
         blocks = resolvedBlocks
         tokens = resolvedTokens
+        footnoteProtectedRanges = registry.footnoteExcludedRanges
         valid = true
         fingerprint = registry.fingerprint
         lock.unlock()
@@ -158,7 +160,7 @@ final class DocumentParseState {
         // DocumentAST.parse, smart-input helpers) take the memcmp hit instead
         // of splicing against a one-keystroke-stale cache every time.
         BlockParser.seedCache(chars: newChars, blocks: resolvedBlocks, fingerprint: registry.fingerprint)
-        MarkdownTokenizer.seedCache(chars: newChars, tokens: resolvedTokens, fingerprint: registry.fingerprint)
+        MarkdownTokenizer.seedCache(chars: newChars, tokens: resolvedTokens, fingerprint: registry.fingerprint, protectedRanges: registry.footnoteExcludedRanges)
         return resolvedTokens
     }
 }

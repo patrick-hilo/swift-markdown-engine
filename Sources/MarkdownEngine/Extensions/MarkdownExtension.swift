@@ -158,12 +158,35 @@ struct ExtensionRegistry {
 
     /// Inline span rules, in registration order.
     var footnoteExcludedRanges: [NSRange] = []
+    var footnoteContextPrepared = false
+    var footnoteContextChanged = false
+
+    func preparingFootnoteContext(in source: NSString) -> Self {
+        guard !footnoteContextPrepared else { return self }
+        var result = self
+        result.footnoteContextPrepared = true
+        if entries.contains(where: { $0.syntax.isFootnoteReference }) {
+            result.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: source)
+        }
+        return result
+    }
 
     func scoped(to range: NSRange) -> Self {
         var result = self
-        result.footnoteExcludedRanges = footnoteExcludedRanges.compactMap {
-            let overlap = NSIntersectionRange($0, range)
-            return overlap.length > 0 ? NSRange(location: overlap.location - range.location, length: overlap.length) : nil
+        result.footnoteExcludedRanges = []
+        var low = 0, high = footnoteExcludedRanges.count
+        while low < high {
+            let middle = (low + high) / 2
+            if NSMaxRange(footnoteExcludedRanges[middle]) <= range.location { low = middle + 1 }
+            else { high = middle }
+        }
+        for index in low..<footnoteExcludedRanges.count {
+            let protected = footnoteExcludedRanges[index]
+            if protected.location >= NSMaxRange(range) { break }
+            let overlap = NSIntersectionRange(protected, range)
+            if overlap.length > 0 {
+                result.footnoteExcludedRanges.append(NSRange(location: overlap.location - range.location, length: overlap.length))
+            }
         }
         return result
     }

@@ -73,10 +73,7 @@ enum DocumentAST {
     static func parse(_ text: String, scopedRanges: [NSRange]? = nil, precomputedBlocks: [Block]? = nil,
                       registry: ExtensionRegistry = .empty) -> [BlockNode] {
         let ns = text as NSString
-        var registry = registry
-        if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
-            registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
-        }
+        let registry = registry.preparingFootnoteContext(in: ns)
         let blocks = precomputedBlocks ?? BlockParser.parse(text, registry: registry)
         let normalizedScopes = scopedRanges.map {
             normalizeScopes($0, documentLength: ns.length)

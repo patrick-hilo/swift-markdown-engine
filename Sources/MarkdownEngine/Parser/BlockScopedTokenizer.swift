@@ -27,6 +27,7 @@ extension MarkdownTokenizer {
     /// Registry fingerprint the memo was computed under — a different set of
     /// registered extensions yields different tokens for identical text.
     private static var cachedTokenFingerprint: String = ""
+    private static var cachedProtectedRanges: [NSRange] = []
 
     /// The live tokenizer: block-level tokens + inline AST tokens; fenced code emits only its code-block token.
     static func parseTokensViaAST(in text: String, registry: ExtensionRegistry = .empty) -> [MarkdownToken] {
@@ -35,6 +36,7 @@ extension MarkdownTokenizer {
             PerfTrace.note { "🗜️ tokenizer.static \(String(format: "%.2f", Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000))ms" }
         }
         let ns = text as NSString
+        var registry = registry.preparingFootnoteContext(in: ns)
         let newLen = ns.length
         var newChars = [unichar](repeating: 0, count: newLen)
         if newLen > 0 { ns.getCharacters(&newChars, range: NSRange(location: 0, length: newLen)) }
@@ -43,12 +45,15 @@ extension MarkdownTokenizer {
 
         tokensLock.lock()
         let prevChars = cachedTokenFingerprint == registry.fingerprint ? cachedTokenChars : nil
+        let previousProtectedRanges = cachedProtectedRanges
         let prevTokens = cachedTokenFingerprint == registry.fingerprint ? cachedTokens : nil
         tokensLock.unlock()
 
         let result: [MarkdownToken]
         if let prevChars, let prevTokens {
             if let diff = BlockParser.scanDiff(old: prevChars, new: newChars) {
+                registry.footnoteContextChanged = FootnoteContext.protectionChanged(
+                    old: previousProtectedRanges, new: registry.footnoteExcludedRanges, diff: diff)
                 result = incrementalTokens(oldChars: prevChars, prevTokens: prevTokens, newChars: newChars, blocks: blocks, ns: ns, diff: diff, registry: registry)?.tokens
                     ?? fullTokens(blocks: blocks, ns: ns, registry: registry)
             } else {
@@ -60,6 +65,7 @@ extension MarkdownTokenizer {
 
         tokensLock.lock()
         cachedTokenChars = newChars; cachedTokens = result; cachedTokenFingerprint = registry.fingerprint
+        cachedProtectedRanges = registry.footnoteExcludedRanges
         tokensLock.unlock()
         return result
     }
@@ -67,17 +73,15 @@ extension MarkdownTokenizer {
     /// Adopt an externally computed parse (DocumentParseState publishes its
     /// per-keystroke result) so static-path callers hit instead of re-splicing
     /// against a one-keystroke-stale cache.
-    static func seedCache(chars: [unichar], tokens: [MarkdownToken], fingerprint: String = "") {
+    static func seedCache(chars: [unichar], tokens: [MarkdownToken], fingerprint: String = "", protectedRanges: [NSRange] = []) {
         tokensLock.lock()
         cachedTokenChars = chars; cachedTokens = tokens; cachedTokenFingerprint = fingerprint
+        cachedProtectedRanges = protectedRanges
         tokensLock.unlock()
     }
 
     static func fullTokens(blocks: [Block], ns: NSString, registry: ExtensionRegistry = .empty) -> [MarkdownToken] {
-        var registry = registry
-        if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
-            registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
-        }
+        let registry = registry.preparingFootnoteContext(in: ns)
         var result: [MarkdownToken] = []
         for block in blocks {
             let delta = block.range.location
@@ -91,11 +95,15 @@ extension MarkdownTokenizer {
     /// against a precomputed change region; nil to fall back to full.
     static func incrementalTokens(oldChars o: [unichar], prevTokens: [MarkdownToken], newChars n: [unichar], blocks: [Block], ns: NSString, diff: BufferDiff, registry: ExtensionRegistry = .empty) -> (tokens: [MarkdownToken], retok: Int)? {
         var registry = registry
-        if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
-            let oldSource = String(utf16CodeUnits: o, count: o.count) as NSString
-            if FootnoteContext.protectionChanged(old: oldSource, new: ns, diff: diff) { return nil }
-            registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
+        if !registry.footnoteContextPrepared {
+            registry = registry.preparingFootnoteContext(in: ns)
+            if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
+                registry.footnoteContextChanged = FootnoteContext.protectionChanged(
+                    old: FootnoteContext.protectedRanges(in: String(utf16CodeUnits: o, count: o.count) as NSString),
+                    new: registry.footnoteExcludedRanges, diff: diff)
+            }
         }
+        if registry.footnoteContextChanged { return nil }
         let oldLen = o.count, newLen = n.count
         guard oldLen > 0, newLen > 0, !blocks.isEmpty else { return nil }
 
