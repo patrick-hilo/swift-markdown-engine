@@ -74,10 +74,14 @@ extension MarkdownTokenizer {
     }
 
     static func fullTokens(blocks: [Block], ns: NSString, registry: ExtensionRegistry = .empty) -> [MarkdownToken] {
+        var registry = registry
+        if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
+            registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
+        }
         var result: [MarkdownToken] = []
         for block in blocks {
             let delta = block.range.location
-            let relTokens = cachedBlockTokens(kind: block.kind, sub: ns.substring(with: block.range), registry: registry)
+            let relTokens = cachedBlockTokens(kind: block.kind, sub: ns.substring(with: block.range), registry: registry.scoped(to: block.range))
             result.append(contentsOf: relTokens.map { $0.shifted(by: delta) })
         }
         return result
@@ -86,6 +90,13 @@ extension MarkdownTokenizer {
     /// Reuse prefix/suffix tokens (suffix shifted) and re-tokenize only touched blocks,
     /// against a precomputed change region; nil to fall back to full.
     static func incrementalTokens(oldChars o: [unichar], prevTokens: [MarkdownToken], newChars n: [unichar], blocks: [Block], ns: NSString, diff: BufferDiff, registry: ExtensionRegistry = .empty) -> (tokens: [MarkdownToken], retok: Int)? {
+        var registry = registry
+        if registry.entries.contains(where: { $0.syntax.isFootnoteReference }) {
+            let oldSource = String(utf16CodeUnits: o, count: o.count) as NSString
+            let oldProtected = FootnoteContext.protectedRanges(in: oldSource)
+            registry.footnoteExcludedRanges = FootnoteContext.protectedRanges(in: ns)
+            if oldProtected != registry.footnoteExcludedRanges { return nil }
+        }
         let oldLen = o.count, newLen = n.count
         guard oldLen > 0, newLen > 0, !blocks.isEmpty else { return nil }
 
@@ -144,7 +155,7 @@ extension MarkdownTokenizer {
         for t in prevTokens where NSMaxRange(t.range) <= regionStart { result.append(t) }   // prefix, unchanged
         for i in lo...hi {                                                                   // changed window, retokenized
             let off = blocks[i].range.location
-            let rel = cachedBlockTokens(kind: blocks[i].kind, sub: ns.substring(with: blocks[i].range), registry: registry)
+            let rel = cachedBlockTokens(kind: blocks[i].kind, sub: ns.substring(with: blocks[i].range), registry: registry.scoped(to: blocks[i].range))
             result.append(contentsOf: rel.map { $0.shifted(by: off) })
         }
         for t in prevTokens where t.range.location >= regionEndOld { result.append(t.shifted(by: delta)) }  // suffix, shifted
@@ -155,7 +166,7 @@ extension MarkdownTokenizer {
     /// the token logic. The key carries the registry fingerprint — the same text
     /// tokenizes differently under a different extension set.
     static func cachedBlockTokens(kind: BlockKind, sub: String, registry: ExtensionRegistry = .empty) -> [MarkdownToken] {
-        let key = registry.fingerprint.isEmpty ? sub : registry.fingerprint + "\u{1F}" + sub
+        let key = "\(kind)|\(registry.footnoteExcludedRanges)|" + registry.fingerprint + "\u{1F}" + sub
         blockTokenLock.lock()
         if let cached = blockTokenCache[key] {
             blockTokenLock.unlock()

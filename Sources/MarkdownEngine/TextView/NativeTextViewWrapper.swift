@@ -569,6 +569,17 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             textView.centerReadingColumn(forClipWidth: nsView.contentView.bounds.width)
             textView.scheduleTableWidthRestyle()
         }
+        if textView.configuration.paragraph != configuration.paragraph, !textView.hasMarkedText() {
+            let origin = nsView.contentView.bounds.origin
+            let selection = textView.selectedRanges
+            textView.configuration.paragraph = configuration.paragraph
+            context.coordinator.configuration.paragraph = configuration.paragraph
+            let range = NSRange(location: 0, length: (textView.string as NSString).length)
+            if range.length > 0 { context.coordinator.restyleParagraphs([range], in: textView) }
+            textView.selectedRanges = selection
+            nsView.contentView.scroll(to: origin)
+            nsView.reflectScrolledClipView(nsView.contentView)
+        }
         // Refresh services/theme when the embedder hands us a new configuration
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the

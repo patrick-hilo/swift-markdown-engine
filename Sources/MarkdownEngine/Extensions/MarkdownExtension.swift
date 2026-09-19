@@ -33,6 +33,7 @@ import Foundation
 /// * A newline before the close aborts the match (spans are single-line).
 public struct InlineSyntax: Sendable, Equatable {
     /// Opening delimiter, e.g. `"=="`.
+    public var isFootnoteReference: Bool
     public var open: String
     /// Closing delimiter, e.g. `"=="`.
     public var close: String
@@ -61,8 +62,10 @@ public struct InlineSyntax: Sendable, Equatable {
         parsesContent: Bool = true,
         requiresNonEmptyContent: Bool = true,
         rejectsOpenerRun: Bool = true,
-        rejectsCloserRun: Bool = false
+        rejectsCloserRun: Bool = false,
+        isFootnoteReference: Bool = false
     ) {
+        self.isFootnoteReference = isFootnoteReference
         self.open = open
         self.close = close
         self.parsesContent = parsesContent
@@ -153,6 +156,17 @@ struct ExtensionRegistry {
     }
 
     /// Inline span rules, in registration order.
+    var footnoteExcludedRanges: [NSRange] = []
+
+    func scoped(to range: NSRange) -> Self {
+        var result = self
+        result.footnoteExcludedRanges = footnoteExcludedRanges.compactMap {
+            let overlap = NSIntersectionRange($0, range)
+            return overlap.length > 0 ? NSRange(location: overlap.location - range.location, length: overlap.length) : nil
+        }
+        return result
+    }
+
     let entries: [Entry]
     /// Fenced block rules, in registration order.
     let blockEntries: [BlockEntry]
@@ -208,7 +222,7 @@ struct ExtensionRegistry {
                 if let s = ext.inline {
                     parts += ["i", framed(s.open), framed(s.close),
                               "\(s.parsesContent)", "\(s.requiresNonEmptyContent)",
-                              "\(s.rejectsOpenerRun)", "\(s.rejectsCloserRun)"]
+                              "\(s.rejectsOpenerRun)", "\(s.rejectsCloserRun)", "\(s.isFootnoteReference)"]
                 }
                 if let b = ext.block {
                     parts += ["b", framed(b.fence)]

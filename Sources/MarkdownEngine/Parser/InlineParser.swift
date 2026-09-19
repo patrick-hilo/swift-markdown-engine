@@ -107,7 +107,7 @@ enum InlineParser {
 
     /// Parse the inline content of `range` within `ns`, returning nodes in absolute document coordinates.
     static func parse(_ ns: NSString, range: NSRange, registry: ExtensionRegistry = .empty) -> [InlineNode] {
-        offsetNodes(parse(ns.substring(with: range), registry: registry), by: range.location)
+        offsetNodes(parse(ns.substring(with: range), registry: registry.scoped(to: range)), by: range.location)
     }
 
     // MARK: - Span model
@@ -320,6 +320,7 @@ enum InlineParser {
         // built-in's first character is still reachable.
         let c = ns.character(at: i)
         for entry in registry.entries where entry.open.first == c {
+            if entry.syntax.isFootnoteReference, registry.footnoteExcludedRanges.contains(where: { NSLocationInRange(i, $0) }) { continue }
             if let span = matchExtensionSpan(ns, len, start: i, entry: entry) { return span }
         }
         return nil
@@ -362,6 +363,13 @@ enum InlineParser {
                 if entry.syntax.requiresNonEmptyContent, k == contentStart { return nil }
                 if entry.syntax.rejectsCloserRun,
                    let after = peek(ns, k + close.count, len), after == close[close.count - 1] { return nil }
+                if entry.syntax.isFootnoteReference {
+                    let label = ns.substring(with: NSRange(location: contentStart, length: k - contentStart))
+                    guard !label.isEmpty, !label.contains(where: { $0.isWhitespace || "[]\\".contains($0) }),
+                          peek(ns, k + close.count, len) != 0x3A,
+                          peek(ns, i - 1, len) != bang,
+                          peek(ns, i - 1, len) != lbracket else { return nil }
+                }
                 return .ext(
                     id: entry.id,
                     range: NSRange(location: i, length: (k + close.count) - i),
@@ -763,7 +771,7 @@ enum InlineParser {
 
     /// Recursively parse a sub-range's content, offset back to absolute coordinates.
     private static func reparse(_ range: NSRange, ns: NSString, registry: ExtensionRegistry) -> [InlineNode] {
-        offsetNodes(parse(ns.substring(with: range), registry: registry), by: range.location)
+        offsetNodes(parse(ns.substring(with: range), registry: registry.scoped(to: range)), by: range.location)
     }
 
     // MARK: - Helpers

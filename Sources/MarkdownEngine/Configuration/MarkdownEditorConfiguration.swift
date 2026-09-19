@@ -592,7 +592,7 @@ public struct LinkStyle: Sendable {
 // MARK: - Paragraphs
 
 /// Default paragraph spacing and line height applied to body text.
-public struct ParagraphStyle: Sendable {
+public struct ParagraphStyle: Sendable, Equatable {
     /// Extra paragraph spacing as a fraction of the document's default line height.
     public var spacingFactor: CGFloat
     /// Extra height (points) added to the default paragraph line height.
