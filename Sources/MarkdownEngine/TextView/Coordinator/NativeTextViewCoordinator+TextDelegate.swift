@@ -37,7 +37,31 @@ extension NativeTextViewCoordinator {
         }
         let manager = UndoManager()
         undoManagers[key] = manager
+        for name in [Notification.Name.NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+            NotificationCenter.default.addObserver(self, selector: #selector(refreshFootnotesAfterUndo(_:)), name: name, object: manager)
+        }
         return manager
+    }
+
+    @objc private func refreshFootnotesAfterUndo(_ notification: Notification) {
+        guard let manager = notification.object as? UndoManager,
+              manager === undoManagers[documentId ?? "__default__"],
+              cachedExtensionRegistry.entries.contains(where: { $0.syntax.isFootnoteReference }) else { return }
+        let currentDocument = documentId
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.documentId == currentDocument, let view = self.textView,
+                  !view.hasMarkedText() else { return }
+            // Native undo can restore same-length source without a delegate edit.
+            // Invalidate the generation before styling the restored syntax context.
+            self.parseGeneration &+= 1
+            let origin = view.enclosingScrollView?.contentView.bounds.origin
+            let range = NSRange(location: 0, length: (view.string as NSString).length)
+            if range.length > 0 { self.restyleParagraphs([range], in: view) }
+            if let origin, let scroll = view.enclosingScrollView {
+                scroll.contentView.scroll(to: origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+        }
     }
 
     /// Drops `documentId`'s undo stack when its switch-away snapshot no longer

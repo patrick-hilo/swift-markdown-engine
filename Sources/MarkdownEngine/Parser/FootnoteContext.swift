@@ -44,7 +44,8 @@ enum FootnoteContext {
             if let activeFence = fence {
                 ranges.append(range)
                 let closingRun = content.prefix(while: { $0 == activeFence }).count
-                if closingRun >= fenceLength, content.dropFirst(closingRun).trimmingCharacters(in: .whitespaces).isEmpty {
+                if activeFence == "$" && content.contains("$$")
+                    || closingRun >= fenceLength && content.dropFirst(closingRun).trimmingCharacters(in: .whitespaces).isEmpty {
                     fence = nil
                 }
                 offset = NSMaxRange(range)
@@ -53,7 +54,7 @@ enum FootnoteContext {
             if !frontmatter, let marker = content.first, marker == "`" || marker == "~" || marker == "$" {
                 let count = content.prefix(while: { $0 == marker }).count
                 if count >= (marker == "$" ? 2 : 3), marker != "`" || !content.dropFirst(count).contains("`") {
-                    fence = marker
+                    fence = marker == "$" && content.dropFirst(2).contains("$$") ? nil : marker
                     fenceLength = count
                     ranges.append(range)
                     offset = NSMaxRange(range)

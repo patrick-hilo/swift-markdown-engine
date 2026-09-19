@@ -131,7 +131,8 @@ public enum MarkdownHTMLRenderer {
             .map(stripQuoteMarkers)
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
-        let inlines = InlineParser.parse(stripped, registry: env.registry)
+        let registry = env.registry.preparingFootnoteContext(in: stripped as NSString)
+        let inlines = InlineParser.parse(stripped, registry: registry)
         return "<blockquote>\(renderInlines(inlines, ns: stripped as NSString, env: env))</blockquote>"
     }
 

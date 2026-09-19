@@ -107,10 +107,11 @@ extension FootnoteContextTests {
 
 extension FootnoteContextTests {
     @Test func inlineHTMLAndAutolinksDoNotProtectFollowingProse() {
-        let source = "<https://example.com> prose[^n]\n<em>x</em> prose[^m]\n"
+        let source = "<https://example.com> prose[^n]\n<em>x</em> prose[^m]\n\n$$x$$\n\nProse[^mathAfter]\n"
         let html = MarkdownHTMLRenderer.html(from: source, extensions: [Footnote()])
         #expect(html.contains("<sup>n</sup>"))
         #expect(html.contains("<sup>m</sup>"))
+        #expect(html.contains("<sup>mathAfter</sup>"))
     }
 
     @Test func fenceInfoDoesNotCloseCodeAndLinkedImagesStayLinks() {
