@@ -34,15 +34,19 @@ struct FootnoteContextTests {
         [^html]
         </div>
 
+        - Item [^list]
+            - Nested [^nested]
+        > Quote [^quote]
+
         End [^last]. [^bad label] [^] [^unclosed
         """
         let registry = ExtensionRegistry(extensions: [Footnote()])
         let tokens = MarkdownTokenizer.parseTokensViaAST(in: source, registry: registry)
         let labels = tokens.filter { $0.kind == .extensionSpan("test.footnote") }
             .map { (source as NSString).substring(with: $0.contentRange) }
-        #expect(labels == ["a", "b", "last"])
+        #expect(labels == ["a", "b", "list", "nested", "quote", "last"])
         let html = MarkdownHTMLRenderer.html(from: source, extensions: [Footnote()])
-        for label in ["a", "b", "last"] { #expect(html.contains("<sup>\(label)</sup>")) }
+        for label in ["a", "b", "list", "nested", "quote", "last"] { #expect(html.contains("<sup>\(label)</sup>")) }
         for label in ["yaml", "code", "escaped", "link", "image", "attribute", "comment", "inside", "continuation", "indented", "fenced", "html"] {
             #expect(!html.contains("<sup>\(label)</sup>"))
         }
@@ -61,6 +65,12 @@ extension FootnoteContextTests {
     @Test func otherProtectedBlocks() {
         let source = """
         [link]: path "[^title]"
+
+        > [^quoted]: Definition [^body]
+
+        > ```
+        > [^codeInQuote]
+        > ```
 
         ~~~
         [^tilde]

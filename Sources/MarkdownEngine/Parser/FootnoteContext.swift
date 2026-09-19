@@ -28,16 +28,21 @@ enum FootnoteContext {
             let range = source.lineRange(for: NSRange(location: offset, length: 0))
             let line = source.substring(with: range).trimmingCharacters(in: .newlines)
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            var content = trimmed
+            while content.hasPrefix(">") { content = String(content.dropFirst()).trimmingCharacters(in: .whitespaces) }
+            let listPrefix = content.range(of: #"^(?:[-+*] |[0-9]+[.)] )"#, options: .regularExpression)
+            if let listPrefix { content.removeSubrange(listPrefix) }
+            let indentedCode = listPrefix == nil && (line.hasPrefix("    ") || line.hasPrefix("\t"))
             if let activeFence = fence {
                 ranges.append(range)
-                if trimmed.prefix(while: { $0 == activeFence }).count >= fenceLength {
+                if content.prefix(while: { $0 == activeFence }).count >= fenceLength {
                     fence = nil
                 }
                 offset = NSMaxRange(range)
                 continue
             }
-            if !frontmatter, let marker = trimmed.first, marker == "`" || marker == "~" || marker == "$" {
-                let count = trimmed.prefix(while: { $0 == marker }).count
+            if !frontmatter, let marker = content.first, marker == "`" || marker == "~" || marker == "$" {
+                let count = content.prefix(while: { $0 == marker }).count
                 if count >= (marker == "$" ? 2 : 3) {
                     fence = marker
                     fenceLength = count
@@ -51,11 +56,11 @@ enum FootnoteContext {
                 ranges.append(range)
                 if offset > 0, line == "---" || line == "..." { frontmatter = false }
             } else {
-                if trimmed.hasPrefix("<") { htmlBlock = true }
+                if content.hasPrefix("<") { htmlBlock = true }
                 if trimmed.isEmpty { htmlBlock = false }
-                if trimmed.hasPrefix("["), trimmed.contains("]:") { definition = true }
+                if content.hasPrefix("["), content.contains("]:") { definition = true }
                 else if !trimmed.isEmpty, !line.hasPrefix("    "), !line.hasPrefix("\t") { definition = false }
-                if htmlBlock || definition || line.hasPrefix("    ") || line.hasPrefix("\t") {
+                if htmlBlock || definition || indentedCode {
                     ranges.append(range)
                 }
             }
