@@ -51,11 +51,15 @@ extension NativeTextViewCoordinator {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.documentId == currentDocument, let view = self.textView,
                   !view.hasMarkedText() else { return }
-            // Native undo can restore same-length source without a delegate edit.
-            // Invalidate the generation before styling the restored syntax context.
+            let source = view.string
+            guard source.contains("[^") || self.cachedParsedText?.contains("[^") == true else { return }
+            // Undo can restore source without a delegate edit. Reuse the normal
+            // parse-state context comparison; ordinary undo needs no global style pass.
             self.parseGeneration &+= 1
+            _ = self.parsedDocument(for: source)
+            guard self.parseState.footnoteContextChanged else { return }
             let origin = view.enclosingScrollView?.contentView.bounds.origin
-            let range = NSRange(location: 0, length: (view.string as NSString).length)
+            let range = NSRange(location: 0, length: (source as NSString).length)
             if range.length > 0 { self.restyleParagraphs([range], in: view) }
             if let origin, let scroll = view.enclosingScrollView {
                 scroll.contentView.scroll(to: origin)
