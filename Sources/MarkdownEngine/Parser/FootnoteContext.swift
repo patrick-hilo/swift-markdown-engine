@@ -29,7 +29,7 @@ enum FootnoteContext {
             offset = NSMaxRange(range)
         }
         // Raw tags/comments remain opaque to footnotes.
-        for pattern in ["<!--(?s:.*?)-->", "<[^>]*>"] {
+        for pattern in ["<!--(?s:.*?)(?:-->|$)", "<[^>\\n]*(?:>|$)", #"!?\[(?:[^\[\]\n]|\[[^\[\]\n]*\])*\]\([^\n]*?\)"#] {
             if let regex = try? NSRegularExpression(pattern: pattern) {
                 ranges += regex.matches(in: source as String, range: NSRange(location: 0, length: source.length)).map(\.range)
             }
