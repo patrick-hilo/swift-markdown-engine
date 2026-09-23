@@ -1024,21 +1024,18 @@ enum MarkdownASTStyler {
         }
     }
 
-    /// Shrink inactive markers; an active ancestor reveals its whole subtree via `forceReveal`.
-    private static func shrinkInlineMarkers(_ nodes: [InlineNode], ctx: Ctx, forceReveal: Bool = false, into attrs: inout [StyledRange]) {
+    /// Reveal only constructs containing the caret, including its ancestors.
+    private static func shrinkInlineMarkers(_ nodes: [InlineNode], ctx: Ctx, into attrs: inout [StyledRange]) {
         for node in nodes {
             switch node {
             case .emphasis(_, let range, let markers, let children):
-                let active = forceReveal || ctx.isActive(range)
-                if !active { shrink(markers, ctx: ctx, into: &attrs) }
-                shrinkInlineMarkers(children, ctx: ctx, forceReveal: active, into: &attrs)
+                if !ctx.isActive(range) { shrink(markers, ctx: ctx, into: &attrs) }
+                shrinkInlineMarkers(children, ctx: ctx, into: &attrs)
             case .ext(let node):
-                let active = forceReveal || ctx.isActive(node.range)
-                if !active { shrink(node.markers, ctx: ctx, into: &attrs) }
-                shrinkInlineMarkers(node.children, ctx: ctx, forceReveal: active, into: &attrs)
+                if !ctx.isActive(node.range) { shrink(node.markers, ctx: ctx, into: &attrs) }
+                shrinkInlineMarkers(node.children, ctx: ctx, into: &attrs)
             case .link(let range, _, _, let markers, let children):
-                let active = forceReveal || ctx.isActive(range)
-                if !active {
+                if !ctx.isActive(range) {
                     shrink(markers, ctx: ctx, into: &attrs)
                     if markers.count >= 4 {   // also hide the "(url)" run
                         let hide = NSRange(location: markers[2].location,
@@ -1046,13 +1043,13 @@ enum MarkdownASTStyler {
                         attrs.append((hide, [.font: ctx.inlineMarkerFont, .foregroundColor: NSColor.clear]))
                     }
                 }
-                shrinkInlineMarkers(children, ctx: ctx, forceReveal: active, into: &attrs)
+                shrinkInlineMarkers(children, ctx: ctx, into: &attrs)
             case .wikiLink(let range, _, _, let markers):
-                if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }
+                if !ctx.isActive(range) { shrink(markers, ctx: ctx, into: &attrs) }
             case .image(let range, _, _, let markers):
-                if !(forceReveal || ctx.isActive(range)) { shrink(markers, ctx: ctx, into: &attrs) }
+                if !ctx.isActive(range) { shrink(markers, ctx: ctx, into: &attrs) }
             case .escape(let range, _, let marker):
-                if !(forceReveal || ctx.isActive(range)) { shrink([marker], ctx: ctx, into: &attrs) }
+                if !ctx.isActive(range) { shrink([marker], ctx: ctx, into: &attrs) }
             case .text, .code, .imageEmbed, .inlineLatex:
                 break   // own marker handling / not shrunk
             }
