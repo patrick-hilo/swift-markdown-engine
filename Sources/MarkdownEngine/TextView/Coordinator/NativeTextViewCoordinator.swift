@@ -215,6 +215,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var userPrefersContinuousSpellChecking: Bool = true
     var userPrefersGrammarChecking: Bool = true
     var userPrefersAutomaticSpellingCorrection: Bool = true
+    var userPrefersAutomaticQuoteSubstitution: Bool = true
 
     /// Fires after the user toggles a spell/grammar/auto-correction menu item.
     /// Embedders persist the returned policy (e.g. to `UserDefaults`) and feed
@@ -225,7 +226,8 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         SpellCheckingPolicy(
             continuousSpellChecking: userPrefersContinuousSpellChecking,
             grammarChecking: userPrefersGrammarChecking,
-            automaticSpellingCorrection: userPrefersAutomaticSpellingCorrection
+            automaticSpellingCorrection: userPrefersAutomaticSpellingCorrection,
+            automaticQuoteSubstitution: userPrefersAutomaticQuoteSubstitution
         )
     }
 
@@ -237,6 +239,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         userPrefersContinuousSpellChecking = textView.isContinuousSpellCheckingEnabled
         userPrefersGrammarChecking = textView.isGrammarCheckingEnabled
         userPrefersAutomaticSpellingCorrection = textView.isAutomaticSpellingCorrectionEnabled
+        userPrefersAutomaticQuoteSubstitution = textView.isAutomaticQuoteSubstitutionEnabled
         // Invalidate the "didn't change" short-circuit so the next selection
         // update re-applies the preferences cleanly.
         cachedSpellingDisabled = nil
