@@ -141,6 +141,21 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// Return `true` to show the arrow cursor instead of the I-beam.
     public var isCursorExcluded: ((CGPoint) -> Bool)?
 
+    /// Fires once the editor's `NSTextView` exists, at the end of `makeNSView`, and
+    /// again from `dismantleNSView` when it goes away. An embedder that keeps
+    /// per-document state on the view (undo publication, navigation, folding) gets
+    /// the view from here instead of searching the hierarchy.
+    public var onEditorAttached: ((NSTextView) -> Void)?
+    public var onEditorDetached: ((NSTextView) -> Void)?
+    /// Bracket every publication of the display text into the `text` binding.
+    /// `onTextWillPublish` fires synchronously inside `textDidChange`, before the
+    /// deferred main-queue write; `onTextDidPublish` fires right after the binding
+    /// is written. An embedder that reads the binding after an edit counts the
+    /// pair and waits for zero outstanding publications instead of guessing how
+    /// many run-loop turns the engine takes.
+    public var onTextWillPublish: (() -> Void)?
+    public var onTextDidPublish: (() -> Void)?
+
     public init(
         text: Binding<String>,
         isWikiLinkActive: Binding<Bool> = .constant(false),
@@ -166,7 +181,11 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         retainedScrollDocumentIds: Set<String>? = nil,
         onPersistScrollOffset: ((String, CGFloat) -> Void)? = nil,
         restoreScrollOffset: ((String) -> CGFloat?)? = nil,
-        isCursorExcluded: ((CGPoint) -> Bool)? = nil
+        isCursorExcluded: ((CGPoint) -> Bool)? = nil,
+        onEditorAttached: ((NSTextView) -> Void)? = nil,
+        onEditorDetached: ((NSTextView) -> Void)? = nil,
+        onTextWillPublish: (() -> Void)? = nil,
+        onTextDidPublish: (() -> Void)? = nil
     ) {
         self._text = text
         self._isWikiLinkActive = isWikiLinkActive
@@ -193,6 +212,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.onPersistScrollOffset = onPersistScrollOffset
         self.restoreScrollOffset = restoreScrollOffset
         self.isCursorExcluded = isCursorExcluded
+        self.onEditorAttached = onEditorAttached
+        self.onEditorDetached = onEditorDetached
+        self.onTextWillPublish = onTextWillPublish
+        self.onTextDidPublish = onTextDidPublish
     }
 
     public func sizeThatFits(
@@ -334,6 +357,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onInlineSelectionChange = onInlineSelectionChange
         context.coordinator.onInlinePreviewKey = onInlinePreviewKey
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
+        context.coordinator.onEditorDetached = onEditorDetached
+        context.coordinator.onTextWillPublish = onTextWillPublish
+        context.coordinator.onTextDidPublish = onTextDidPublish
 
         textView.recalcOverscroll(for: scrollView, debugTag: "open")
         textView.setPlaceholder(placeholder)
@@ -397,6 +423,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             coordinator.updateCodeBlockSelection(textView: textView)
         })
         reconcileHeader(textView: textView, context: context)
+        onEditorAttached?(textView)
         return scrollView
     }
 
@@ -773,6 +800,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onInlineSelectionChange = onInlineSelectionChange
         context.coordinator.onInlinePreviewKey = onInlinePreviewKey
         context.coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
+        context.coordinator.onEditorDetached = onEditorDetached
+        context.coordinator.onTextWillPublish = onTextWillPublish
+        context.coordinator.onTextDidPublish = onTextDidPublish
         context.coordinator.didInitialFormatting = true
     }
 
@@ -797,6 +827,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         coordinator.lastWikiFingerprint = configuration.services.wikiLinks.fingerprint()
         coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         coordinator.onInlinePreviewKey = onInlinePreviewKey
+        coordinator.onEditorDetached = onEditorDetached
+        coordinator.onTextWillPublish = onTextWillPublish
+        coordinator.onTextDidPublish = onTextDidPublish
         coordinator.userPrefersContinuousSpellChecking = configuration.spellChecking.continuousSpellChecking
         coordinator.userPrefersGrammarChecking = configuration.spellChecking.grammarChecking
         coordinator.userPrefersAutomaticSpellingCorrection = configuration.spellChecking.automaticSpellingCorrection
@@ -811,6 +844,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     public static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         coordinator.removeViewportObservers()
         coordinator.cancelStagedStyling()
+        if let textView = coordinator.textView { coordinator.onEditorDetached?(textView) }
         // A restore still pending means the reader was never put back where they
         // were — recording the current offset would overwrite the good one with
         // the mid-load position.

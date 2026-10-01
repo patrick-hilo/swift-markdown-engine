@@ -102,6 +102,19 @@ extension NativeTextViewCoordinator {
         return result
     }
 
+    /// The one place the display text reaches the `text` binding. The write is
+    /// deferred by a main-queue turn so SwiftUI is not re-entered from inside
+    /// AppKit's edit; `onTextWillPublish` and `onTextDidPublish` bracket that
+    /// turn so an embedder can count outstanding publications.
+    func publishToBinding(_ storage: String) {
+        onTextWillPublish?()
+        DispatchQueue.main.async {
+            self.lastSyncedText = storage
+            self.text = storage
+            self.onTextDidPublish?()
+        }
+    }
+
     public func textDidChange(_ notification: Notification) {
         guard let tv = notification.object as? NSTextView else { return }
         PerfTrace.checkpoint("didIn")
@@ -119,11 +132,7 @@ extension NativeTextViewCoordinator {
             pendingEditedRange = nil
             guard !tv.hasMarkedText() else { return }
             if tv.string != lastSyncedText {
-                let rawText = tv.string
-                DispatchQueue.main.async {
-                    self.lastSyncedText = rawText
-                    self.text = rawText
-                }
+                publishToBinding(tv.string)
             }
             if let bottomTextView = tv as? NativeTextView,
                let scrollView = tv.enclosingScrollView {
@@ -224,10 +233,7 @@ extension NativeTextViewCoordinator {
             }
 #endif
             if storageState.storage != self.lastSyncedText {
-                DispatchQueue.main.async {
-                    self.lastSyncedText = storageState.storage
-                    self.text = storageState.storage
-                }
+                publishToBinding(storageState.storage)
             }
         }
 
