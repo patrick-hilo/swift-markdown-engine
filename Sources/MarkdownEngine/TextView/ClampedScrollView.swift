@@ -13,6 +13,28 @@ final class ClampedScrollView: NSScrollView {
     /// own height to SwiftUI and the enclosing scroll view owns paging.
     var fitsContent: Bool = false
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        disableRubberBand()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        disableRubberBand()
+    }
+
+    /// No rubber band. AppKit applies a scroll on the next display refresh, not
+    /// inside `scrollWheel(with:)`, so `clampToInsets()` there only ever corrects
+    /// the PREVIOUS event's movement. With the rubber band allowed, every refresh
+    /// committed a fresh overshoot past the edge and every event pulled it back,
+    /// so a trackpad held against the top or bottom flickered between the edge
+    /// and 12–24pt past it. The document view is sized to the real content
+    /// height, so AppKit now stops exactly at the edge on its own and the clamp
+    /// is a backstop again.
+    private func disableRubberBand() {
+        verticalScrollElasticity = .none
+    }
+
     /// Saved at the start of every live-resize (including spurious one-click resizes triggered by edge-cursor clicks) so the position is restored when the resize ends. Without this, NSScrollView's default top-anchor-during-resize would jolt a bottom-anchored user back up by hundreds of points on a single edge click.
     private var scrollYBeforeLiveResize: CGFloat?
 
