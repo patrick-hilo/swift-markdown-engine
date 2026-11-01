@@ -25,6 +25,9 @@ struct DocumentOpenEventsTests {
         var estimatedAtDid: [Bool] = []
         var tailFontSizeAtDid: [CGFloat] = []
         var tailLocation = 0
+        /// Whether the sequential layout had reached the end of the text.
+        var layoutCompleteAtDid: [Bool] = []
+        var baseHeightAtDid: [CGFloat] = []
         /// Keeps the scroll view and container alive for the test, and no longer.
         var stack: HeightBehaviorStack?
     }
@@ -51,6 +54,8 @@ struct DocumentOpenEventsTests {
             recorder.events.append("did")
             recorder.stagedAtDid.append(coordinator?.stagedStylingActive ?? true)
             recorder.estimatedAtDid.append(textView.contentHeightIsEstimated)
+            recorder.layoutCompleteAtDid.append((coordinator?.stagedLayoutEnd ?? 0) >= (textView.string as NSString).length)
+            recorder.baseHeightAtDid.append(textView.baseContentHeight)
             let storage = textView.textStorage!
             let location = min(recorder.tailLocation, max(0, storage.length - 1))
             recorder.tailFontSizeAtDid.append(
@@ -68,6 +73,17 @@ struct DocumentOpenEventsTests {
             text += "Paragraph \(index) with **bold**, *emphasis*, [link](https://example.invalid/\(index)), and `code`.\n\n"
             text += "- [ ] task \(index)\n- item\n\n> quote \(index)\n\n"
         }
+        return text
+    }
+
+    /// Short headings and list items first, long paragraphs after: extrapolated from the
+    /// head, the estimated height overshoots, so only the exact measurement at the end
+    /// brings it down.
+    private func unevenDocument() -> String {
+        var text = ""
+        for index in 0..<1_200 { text += "## H\(index)\n\n- a\n- b\n\n" }
+        let paragraph = String(repeating: "Dense prose without breaks keeps many characters on each line. ", count: 30)
+        for _ in 0..<60 { text += paragraph + "\n\n" }
         return text
     }
 
@@ -171,14 +187,100 @@ struct DocumentOpenEventsTests {
         #expect(recorder.stagedAtDid == [false, false])
     }
 
-    @Test("cancelling a staged open, as dismantling the view does, drops its report")
+    /// Opens the same text in a second editor that is left alone; once that one has
+    /// reported, an uncancelled open of the first would have reported too.
+    private func waitForAControlOpen(of text: String) async {
+        let (control, controlView, controlRecorder) = makeEditor()
+        control.rebuildTextStorageAndStyle(controlView, from: text)
+        await waitFor { controlRecorder.events.count >= 2 }
+        #expect(controlRecorder.events == ["will", "did"])
+        await settle()
+    }
+
+    @Test("cancelling a staged open drops its report")
     func cancelledStagedOpenDoesNotReport() async {
         let (coordinator, textView, recorder) = makeEditor()
-        coordinator.rebuildTextStorageAndStyle(textView, from: largeDocument())
+        let text = largeDocument()
+        coordinator.rebuildTextStorageAndStyle(textView, from: text)
         #expect(coordinator.stagedStylingActive)
         coordinator.cancelStagedStyling()
-        await settle()
+        await waitForAControlOpen(of: text)
         #expect(recorder.events == ["will"])
+    }
+
+    @Test("dismantling the view during a staged open drops its report")
+    func dismantleDropsTheReport() async throws {
+        let (coordinator, textView, recorder) = makeEditor()
+        let text = largeDocument()
+        coordinator.rebuildTextStorageAndStyle(textView, from: text)
+        #expect(coordinator.stagedStylingActive)
+        let scrollView = try #require(recorder.stack?.scrollView)
+        NativeTextViewWrapper.dismantleNSView(scrollView, coordinator: coordinator)
+        await waitForAControlOpen(of: text)
+        #expect(recorder.events == ["will"])
+    }
+
+    @Test("an open whose chunks are styled early reports only once the layout reached the end")
+    func reportWaitsForTheLayout() async {
+        let (coordinator, textView, recorder) = makeEditor()
+        coordinator.rebuildTextStorageAndStyle(textView, from: largeDocument())
+        // What restoring a remembered scroll offset does: style everything now, lay out later.
+        coordinator.drainStagedStyling(textView)
+        #expect(coordinator.stagedStylingPending.isEmpty)
+        #expect(coordinator.stagedStylingActive)
+        await waitFor { recorder.events.count >= 2 }
+        await settle()
+        #expect(recorder.events == ["will", "did"])
+        #expect(recorder.layoutCompleteAtDid == [true])
+    }
+
+    @Test("a staged open reports with the exact height, not the estimate")
+    func reportCarriesTheExactHeight() async throws {
+        let (coordinator, textView, recorder) = makeEditor()
+        coordinator.rebuildTextStorageAndStyle(textView, from: unevenDocument())
+        #expect(coordinator.stagedStylingActive)
+        let scrollView = try #require(recorder.stack?.scrollView)
+        textView.recalcOverscroll(for: scrollView, debugTag: "open")
+        await waitFor { recorder.events.count >= 2 }
+        await settle()
+        #expect(recorder.events == ["will", "did"])
+        let reported = try #require(recorder.baseHeightAtDid.first)
+        textView.pendingFullLayoutMeasure = true
+        textView.recalcOverscroll(for: scrollView, debugTag: "check")
+        #expect(abs(reported - textView.baseContentHeight) < 0.5, "reported \(reported), exact \(textView.baseContentHeight)")
+    }
+
+    @Test("an update pass hands the rebuild the callbacks it carries")
+    func updatePassRefreshesTheCallbacks() async throws {
+        _ = NSApplication.shared
+        final class Source { var text = "# One\n" }
+        let source = Source()
+        var first: [String] = []
+        var second: [String] = []
+        func editor(_ record: @escaping (String) -> Void) -> NativeTextViewWrapper {
+            NativeTextViewWrapper(
+                text: Binding(get: { source.text }, set: { source.text = $0 }),
+                documentId: "update-pass",
+                onDocumentWillOpen: { _ in record("will") },
+                onDocumentDidOpen: { _ in record("did") }
+            )
+        }
+        let host = NSHostingView(rootView: editor { first.append($0) })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = host
+        defer { window.contentView = nil }
+        host.layoutSubtreeIfNeeded()
+        await waitFor { first.count >= 2 }
+        #expect(first == ["will", "did"])
+
+        source.text = "# Two\n"
+        host.rootView = editor { second.append($0) }
+        host.layoutSubtreeIfNeeded()
+        await waitFor { second.count >= 2 }
+        await settle()
+        #expect(second == ["will", "did"], "the rebuild of the update pass reports through the new callbacks")
+        #expect(first == ["will", "did"], "and no longer through the old ones")
     }
 
     @Test("cancelling right after a short rebuild drops its report")

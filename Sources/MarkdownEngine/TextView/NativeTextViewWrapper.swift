@@ -157,8 +157,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     public var onTextDidPublish: (() -> Void)?
     /// Bracket every rebuild of the document in the text view: the first open, a
     /// document switch, text from the binding the editor did not publish itself, a
-    /// font or raw-source change. `onDocumentWillOpen` fires synchronously as the
-    /// rebuild starts; `onDocumentDidOpen` fires once the whole document is styled and
+    /// font or raw-source change, the end of a Writing Tools session.
+    /// `onDocumentWillOpen` fires synchronously as the rebuild starts;
+    /// `onDocumentDidOpen` fires once the whole document is styled and
     /// laid out, always on a later main-queue turn: the next one for a document short
     /// enough for one pass, the last background turn for a staged open. A rebuild that
     /// starts before the previous one finished supersedes it, and dismantling the view

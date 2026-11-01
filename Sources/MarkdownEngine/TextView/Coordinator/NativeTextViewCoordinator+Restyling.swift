@@ -27,7 +27,6 @@ extension NativeTextViewCoordinator {
         defer { isRebuildingDocument = false }
         // Chunks queued for the previous document would style the wrong text.
         cancelStagedStyling()
-        onDocumentWillOpen?(textView)
         (textView as? NativeTextView)?.lastStyledAppearanceName = textView.effectiveAppearance.name
         // A rebuild means a different document (or a mode flip): drop the caret
         // ink resolved for the old one instead of carrying it into this text.
@@ -97,6 +96,8 @@ extension NativeTextViewCoordinator {
         // the whole live storage 210 ms; an insertion into the empty storage is nearly
         // free, so `makeNSView` no longer sets the text ahead of the first rebuild.
         guard let liveStorage = textView.textStorage else { return }
+        // Only past this guard does the rebuild run to its report, so `will` always gets its `did`.
+        onDocumentWillOpen?(textView)
         let storage: NSMutableAttributedString = textChanges ? NSMutableAttributedString(string: displayText) : liveStorage
         if !textChanges { liveStorage.beginEditing() }
         storage.setAttributes(baseAttrs, range: fullRange)
