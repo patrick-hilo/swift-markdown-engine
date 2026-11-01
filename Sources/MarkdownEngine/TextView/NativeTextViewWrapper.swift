@@ -155,6 +155,16 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
     /// many run-loop turns the engine takes.
     public var onTextWillPublish: (() -> Void)?
     public var onTextDidPublish: (() -> Void)?
+    /// Bracket every rebuild of the document in the text view: the first open, a
+    /// document switch, text from the binding the editor did not publish itself, a
+    /// font or raw-source change. `onDocumentWillOpen` fires synchronously as the
+    /// rebuild starts; `onDocumentDidOpen` fires once the whole document is styled and
+    /// laid out, always on a later main-queue turn: the next one for a document short
+    /// enough for one pass, the last background turn for a staged open. A rebuild that
+    /// starts before the previous one finished supersedes it, and dismantling the view
+    /// drops it; an abandoned open never reports.
+    public var onDocumentWillOpen: ((NSTextView) -> Void)?
+    public var onDocumentDidOpen: ((NSTextView) -> Void)?
 
     public init(
         text: Binding<String>,
@@ -185,7 +195,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         onEditorAttached: ((NSTextView) -> Void)? = nil,
         onEditorDetached: ((NSTextView) -> Void)? = nil,
         onTextWillPublish: (() -> Void)? = nil,
-        onTextDidPublish: (() -> Void)? = nil
+        onTextDidPublish: (() -> Void)? = nil,
+        onDocumentWillOpen: ((NSTextView) -> Void)? = nil,
+        onDocumentDidOpen: ((NSTextView) -> Void)? = nil
     ) {
         self._text = text
         self._isWikiLinkActive = isWikiLinkActive
@@ -216,6 +228,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         self.onEditorDetached = onEditorDetached
         self.onTextWillPublish = onTextWillPublish
         self.onTextDidPublish = onTextDidPublish
+        self.onDocumentWillOpen = onDocumentWillOpen
+        self.onDocumentDidOpen = onDocumentDidOpen
     }
 
     public func sizeThatFits(
@@ -360,6 +374,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.onEditorDetached = onEditorDetached
         context.coordinator.onTextWillPublish = onTextWillPublish
         context.coordinator.onTextDidPublish = onTextDidPublish
+        context.coordinator.onDocumentWillOpen = onDocumentWillOpen
+        context.coordinator.onDocumentDidOpen = onDocumentDidOpen
 
         textView.recalcOverscroll(for: scrollView, debugTag: "open")
         textView.setPlaceholder(placeholder)
@@ -440,6 +456,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // to reach the CURRENT closures even when the pass below returns early.
         context.coordinator.onPersistScrollOffset = onPersistScrollOffset
         context.coordinator.restoreScrollOffset = restoreScrollOffset
+        // The rebuild below reports through these, so they have to be current before it.
+        context.coordinator.onDocumentWillOpen = onDocumentWillOpen
+        context.coordinator.onDocumentDidOpen = onDocumentDidOpen
 
         // Drop remembered offsets for documents no longer retained (always keep
         // the current one). Only rebuilds the dict when something must go.
@@ -830,6 +849,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         coordinator.onEditorDetached = onEditorDetached
         coordinator.onTextWillPublish = onTextWillPublish
         coordinator.onTextDidPublish = onTextDidPublish
+        coordinator.onDocumentWillOpen = onDocumentWillOpen
+        coordinator.onDocumentDidOpen = onDocumentDidOpen
         coordinator.userPrefersContinuousSpellChecking = configuration.spellChecking.continuousSpellChecking
         coordinator.userPrefersGrammarChecking = configuration.spellChecking.grammarChecking
         coordinator.userPrefersAutomaticSpellingCorrection = configuration.spellChecking.automaticSpellingCorrection

@@ -117,6 +117,19 @@ extension NativeTextViewCoordinator {
         }
     }
 
+    /// A document short enough for one pass is styled and laid out when the rebuild
+    /// returns, but the update pass that rebuilt it still measures its height and
+    /// restores the scroll offset; the report waits for the next turn, as a staged open
+    /// reports from a later turn too. A rebuild or dismantle in between bumps the
+    /// generation and drops it.
+    func reportDocumentOpenOnNextTurn(_ textView: NSTextView) {
+        let generation = stagedStylingGeneration
+        DispatchQueue.main.async { [weak self, weak textView] in
+            guard let self, let textView, generation == self.stagedStylingGeneration else { return }
+            self.onDocumentDidOpen?(textView)
+        }
+    }
+
     private func scheduleStagedStylingTurn() {
         let generation = stagedStylingGeneration
         DispatchQueue.main.async { [weak self] in
@@ -176,6 +189,8 @@ extension NativeTextViewCoordinator {
     private func finishStagedStyling(_ textView: NSTextView) {
         stagedStylingActive = false
         stagedStylingPending = []
+        // After the exact measurement below, so the embedder sees the final height.
+        defer { onDocumentDidOpen?(textView) }
         guard let native = textView as? NativeTextView else { return }
         native.contentHeightIsEstimated = false
         native.estimatedContentHeightFloor = 0

@@ -89,6 +89,10 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var onEditorDetached: ((NSTextView) -> Void)?
     var onTextWillPublish: (() -> Void)?
     var onTextDidPublish: (() -> Void)?
+    /// See `NativeTextViewWrapper.onDocumentWillOpen`; reported by the rebuild and
+    /// by the end of a staged open.
+    var onDocumentWillOpen: ((NSTextView) -> Void)?
+    var onDocumentDidOpen: ((NSTextView) -> Void)?
     var didInitialFormatting: Bool = false
     /// One-shot guard so `updateCodeBlockSelection` only forces a full-document layout once per document.
     var didEnsureLayoutForCurrentDocument: Bool = false
