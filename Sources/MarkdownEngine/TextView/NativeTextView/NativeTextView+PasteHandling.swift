@@ -36,12 +36,9 @@ extension NativeTextView {
         // copy→paste round-trips byte-exact. The derived HTML flavor is lossy
         // (e.g. the HTML renderer drops the `|UUID` of a wiki link), so this
         // must win over the HTML branch below.
-        if let ownMarkdown = pasteboard.string(forType: MarkdownPasteboardWriter.markdownType) {
-            let sanitized = sanitizePastedText(ownMarkdown)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        if let ownMarkdown = pasteboard.string(forType: MarkdownPasteboardWriter.markdownType), !ownMarkdown.isEmpty {
+            insertPreservingBlockquote(ownMarkdown)
+            return
         }
 
         // Rich paste: convert an HTML flavor (Claude, browsers, Word, Notion)
@@ -54,27 +51,18 @@ extension NativeTextView {
         if let html = pasteboard.string(forType: .html),
            Self.htmlHasBlockStructure(html),
            let markdown = HTMLToMarkdownConverter.markdown(fromHTML: html) {
-            let sanitized = sanitizePastedText(markdown)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+            insertPreservingBlockquote(markdown)
+            return
         }
 
-        if let pasted = pasteboard.string(forType: .string) {
-            let sanitized = sanitizePastedText(pasted)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        if let pasted = pasteboard.string(forType: .string), !pasted.isEmpty {
+            insertPreservingBlockquote(normalizingPlainTextBullets(pasted))
+            return
         }
 
-        if let fileText = textFromPastedFileURL(pasteboard: pasteboard) {
-            let sanitized = sanitizePastedText(fileText)
-            if !sanitized.isEmpty {
-                insertPreservingBlockquote(sanitized)
-                return
-            }
+        if let fileText = textFromPastedFileURL(pasteboard: pasteboard), !fileText.isEmpty {
+            insertPreservingBlockquote(fileText)
+            return
         }
 
         pasteAsPlainText(sender)
@@ -139,18 +127,19 @@ extension NativeTextView {
         return nil
     }
 
-    private func sanitizePastedText(_ s: String) -> String {
-        var out = s
-        // Normalize pasted bullet glyphs (• ‣ ◦ ·) at line start to Markdown '- ' lists.
-        if let bulletRegex = try? NSRegularExpression(pattern: #"^([ \t]*)[•‣◦·][ \t]+"#, options: [.anchorsMatchLines]) {
-            let nsRange = NSRange(location: 0, length: (out as NSString).length)
-            out = bulletRegex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "$1- ")
+    private func normalizingPlainTextBullets(_ text: String) -> String {
+        let pattern = #"^([ \t]*)[•‣◦·][ \t]+"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .anchorsMatchLines) else { return text }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return text }
+        let code = MarkdownTokenizer.parseTokensViaAST(in: text, registry: configuration.extensionRegistry)
+            .filter { $0.kind == .codeBlock || $0.kind == .inlineCode }
+        let result = NSMutableString(string: text)
+        for match in matches.reversed() where !MarkdownDetection.isInsideCodeBlock(range: match.range, codeTokens: code) {
+            let marker = NSMaxRange(match.range(at: 1))
+            result.replaceCharacters(in: NSRange(location: marker, length: NSMaxRange(match.range) - marker), with: "- ")
         }
-        if let regex = try? NSRegularExpression(pattern: "\\n{3,}") {
-            let nsRange = NSRange(location: 0, length: (out as NSString).length)
-            out = regex.stringByReplacingMatches(in: out, range: nsRange, withTemplate: "\n\n")
-        }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result as String
     }
 
     override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
