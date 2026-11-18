@@ -29,6 +29,12 @@ struct HTMLToMarkdownConverterTests {
         #expect(md("<hr>") == "----")
     }
 
+    @Test("Headings and lists survive nested semantic containers")
+    func semanticContainers() {
+        let html = "<main><article><header><h1>Projekt</h1></header><section><h2>Stand</h2><ul><li>Offen</li><li>Erledigt</li></ul></section></article></main>"
+        #expect(md(html) == "# Projekt\n\n## Stand\n\n- Offen\n- Erledigt")
+    }
+
     // MARK: - The headline case: lists → "- " / "1. " lines
 
     @Test("unordered and ordered lists")

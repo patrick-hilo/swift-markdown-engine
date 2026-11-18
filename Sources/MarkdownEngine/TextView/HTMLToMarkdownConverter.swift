@@ -231,12 +231,8 @@ enum HTMLToMarkdownConverter {
             return renderPre(node)
         case "table":
             return renderTable(node)
-        case "div":
-            return renderBlocks(node.children)
-        case "html", "body":
-            // Some sources (GPT, CF_HTML exporters) put a full document on the
-            // clipboard; without these cases the wrapper fell into the inline
-            // unwrap and glued every block's text into one run.
+        case "div", "html", "body", "main", "article", "section", "header", "footer",
+             "aside", "nav", "figure", "figcaption":
             return renderBlocks(node.children)
         case "head", "style", "script", "title":
             return ""   // metadata / code-for-the-browser — never content
