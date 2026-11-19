@@ -268,8 +268,10 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         let snappedY = floor(rawY * scale) / scale
         let snappedMaxY = ceil(rawMaxY * scale) / scale
 
-        // Draw full-width background, clipping out any active selection rects
-        // so the system's blue selection highlight remains visible inside code blocks.
+        // Fill the block across the column, then the selection on top of it. The
+        // fragment draws above the text view's own selection, so a selection the
+        // fill merely left uncovered stayed hidden wherever AppKit painted the glyph
+        // background, and the cut-outs left dark seams between selected lines.
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
         let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
@@ -281,29 +283,47 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             width: containerWidth,
             height: snappedMaxY - snappedY
         )
+        // The attribute carries the block colour without alpha; see `styleCodeBlock`.
+        color.withAlphaComponent(1).setFill()
+        NSBezierPath(rect: bgRect).fill()
 
-        let selectionRects = selectionRectsInDrawCoordinates(drawPoint: point, snappedY: snappedY, snappedMaxY: snappedMaxY)
-        color.setFill()
-        if selectionRects.isEmpty {
-            NSBezierPath(rect: bgRect).fill()
-        } else {
-            let path = NSBezierPath()
-            path.windingRule = .evenOdd
-            path.appendRect(bgRect)
-            for r in selectionRects {
-                path.appendRect(r.intersection(bgRect))
-            }
-            path.fill()
+        var selectionRects = selectionRectsInDrawCoordinates(drawPoint: point)
+            .map { $0.intersection(bgRect) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.minY < $1.minY }
+        guard !selectionRects.isEmpty else { return }
+        // A segment covers the glyph line only; reach the fragment's edges on its first and
+        // last line so selected lines join up like the block fill instead of leaving bands.
+        let lineHeight = textLineFragments.first?.typographicBounds.height ?? 0
+        if let first = selectionRects.first, first.minY - snappedY < lineHeight {
+            selectionRects[0] = CGRect(x: first.minX, y: snappedY, width: first.width, height: first.maxY - snappedY)
         }
+        if let last = selectionRects.last, snappedMaxY - last.maxY < lineHeight {
+            selectionRects[selectionRects.count - 1] = CGRect(x: last.minX, y: last.minY,
+                                                              width: last.width, height: snappedMaxY - last.minY)
+        }
+        selectionColor.setFill()
+        for rect in selectionRects { NSBezierPath(rect: rect).fill() }
     }
 
-    /// Returns active text-selection rectangles intersecting this fragment, in
-    /// the same draw-relative coordinate system used by `drawCodeBlockBackground`.
-    private func selectionRectsInDrawCoordinates(drawPoint: CGPoint, snappedY: CGFloat, snappedMaxY: CGFloat) -> [CGRect] {
+    /// The text view's selection colour: emphasized while it has the focus in the key window.
+    private var selectionColor: NSColor {
+        guard let textView = textLayoutManager?.textContainer?.textView,
+              let window = textView.window,
+              window.isKeyWindow, window.firstResponder === textView else {
+            return .unemphasizedSelectedTextBackgroundColor
+        }
+        return (textView.selectedTextAttributes[.backgroundColor] as? NSColor) ?? .selectedTextBackgroundColor
+    }
+
+    /// Active text-selection rectangles intersecting this fragment, one per line
+    /// segment, in the draw-relative coordinates of `drawCodeBlockBackground`.
+    private func selectionRectsInDrawCoordinates(drawPoint: CGPoint) -> [CGRect] {
         guard let tlm = textLayoutManager else { return [] }
         var rects: [CGRect] = []
 
         let dx = drawPoint.x - layoutFragmentFrame.origin.x
+        let dy = drawPoint.y - layoutFragmentFrame.origin.y
         let myRange = self.rangeInElement
 
         for selection in tlm.textSelections {
@@ -316,15 +336,7 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
                       let intersection = NSTextRange(location: interStart, end: interEnd) else { continue }
 
                 tlm.enumerateTextSegments(in: intersection, type: .selection, options: []) { _, segFrame, _, _ in
-                    // Expand vertically to match the bgRect's snapped span so the
-                    // even-odd cut-out is geometrically congruent with the fill.
-                    let drawRect = CGRect(
-                        x: segFrame.origin.x + dx,
-                        y: snappedY,
-                        width: segFrame.width,
-                        height: snappedMaxY - snappedY
-                    )
-                    rects.append(drawRect)
+                    rects.append(segFrame.offsetBy(dx: dx, dy: dy))
                     return true
                 }
             }

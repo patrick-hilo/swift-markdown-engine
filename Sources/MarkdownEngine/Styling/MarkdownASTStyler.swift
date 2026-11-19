@@ -892,8 +892,13 @@ enum MarkdownASTStyler {
 
     private static func styleCodeBlock(range: NSRange, ctx: Ctx, into attrs: inout [StyledRange]) {
         let parts = codeBlockParts(range, ctx.ns)
+        // The fragment fills the block across the column and leaves the selection
+        // out (`MarkdownTextLayoutFragment.drawCodeBlockBackground`). AppKit paints
+        // `.backgroundColor` again behind every glyph, above the selection, so the
+        // attribute only marks the block: same colour, no alpha.
         attrs.append((parts.codeRange, [
-            .font: ctx.codeFont, .backgroundColor: ctx.codeBackground, .paragraphStyle: ctx.codeParagraphStyle,
+            .font: ctx.codeFont, .backgroundColor: ctx.codeBackground.withAlphaComponent(0),
+            .paragraphStyle: ctx.codeParagraphStyle,
         ]))
         // Suppress spell-check underlines on the whole fenced block — code is not prose.
         attrs.append((parts.codeRange, [.spellingState: 0]))
