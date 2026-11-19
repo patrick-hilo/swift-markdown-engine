@@ -21,8 +21,8 @@ Sources/
 │   │   ├── NativeTextView/                  # AppKit subclass + UX extensions (paste, drag-select, …)
 │   │   └── Coordinator/                     # NSTextViewDelegate split by concern (restyling, find, …)
 │   └── MarkdownEngine.docc/                 # DocC catalog
-├── MarkdownEngineCodeBlocks/                # opt-in SPM product — pulls in HighlighterSwift
-│   └── HighlighterSwiftBridge.swift         # SyntaxHighlighter conformance
+├── MarkdownEngineCodeBlocks/                # opt-in SPM product — bundled highlight.js
+│   └── HighlightJSBridge.swift              # SyntaxHighlighter conformance
 └── MarkdownEngineLatex/                     # opt-in SPM product — pulls in SwiftMath
     └── SwiftMathBridge.swift                # LatexRenderer conformance
 ```
