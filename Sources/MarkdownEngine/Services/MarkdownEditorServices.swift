@@ -184,6 +184,60 @@ public struct NoOpLatexRenderer: LatexRenderer {
     public func render(latex: String, fontSize: CGFloat, theme: MarkdownEditorTheme) -> LatexRenderResult? { nil }
 }
 
+// MARK: - Diagrams
+
+/// What the engine asks a ``DiagramRenderer`` for: the source of one fenced
+/// code block and the language named after its opening fence.
+public struct DiagramRequest: Sendable, Hashable {
+    /// Lowercased language of the fence, e.g. `mermaid`.
+    public let language: String
+    /// The block's content between the fences, exactly as written.
+    public let source: String
+
+    public init(language: String, source: String) {
+        self.language = language
+        self.source = source
+    }
+}
+
+/// A rendered diagram. `size` is the natural size in points; the engine
+/// scales it down to the text column but never up.
+public struct DiagramRenderResult: Sendable {
+    public let image: NSImage
+    public let size: CGSize
+
+    public init(image: NSImage, size: CGSize) {
+        self.image = image
+        self.size = size
+    }
+}
+
+/// Renders fenced code blocks of diagram languages (Mermaid and the like) to
+/// images. A handled block shows its image while the caret is outside it and
+/// its source while the caret is inside, like a block formula.
+///
+/// The engine calls ``diagram(for:)`` while styling, so it must return
+/// quickly: hand back a cached result, or `nil` and render in the background.
+/// When a background render finishes, post ``didRenderNotification`` and the
+/// engine restyles the diagram blocks. A block without a result keeps showing
+/// as an ordinary code block, which is also how a failed render looks.
+public protocol DiagramRenderer: Sendable {
+    /// Whether blocks fenced with `language` (lowercased) are diagrams.
+    func handles(language: String) -> Bool
+    /// The cached rendering of `request`, or `nil` while none exists.
+    func diagram(for request: DiagramRequest) -> DiagramRenderResult?
+    /// Posted (any object) after a background render finished.
+    var didRenderNotification: Notification.Name? { get }
+}
+
+/// Default renderer: no language is a diagram.
+public struct NoOpDiagramRenderer: DiagramRenderer {
+    public init() {}
+    public func handles(language: String) -> Bool { false }
+    public func diagram(for request: DiagramRequest) -> DiagramRenderResult? { nil }
+    public var didRenderNotification: Notification.Name? { nil }
+}
+
 // MARK: - Event Bus
 
 /// Optional notification-name bridge that lets the editor communicate with
@@ -319,6 +373,7 @@ public struct MarkdownEditorServices: Sendable {
     public var images: any EmbeddedImageProvider
     public var syntaxHighlighter: any SyntaxHighlighter
     public var latex: any LatexRenderer
+    public var diagrams: any DiagramRenderer
     public var bus: MarkdownEditorBus
 
     public init(
@@ -326,12 +381,14 @@ public struct MarkdownEditorServices: Sendable {
         images: any EmbeddedImageProvider = NoOpEmbeddedImageProvider(),
         syntaxHighlighter: any SyntaxHighlighter = PlainTextSyntaxHighlighter(),
         latex: any LatexRenderer = NoOpLatexRenderer(),
+        diagrams: any DiagramRenderer = NoOpDiagramRenderer(),
         bus: MarkdownEditorBus = .default
     ) {
         self.wikiLinks = wikiLinks
         self.images = images
         self.syntaxHighlighter = syntaxHighlighter
         self.latex = latex
+        self.diagrams = diagrams
         self.bus = bus
     }
 

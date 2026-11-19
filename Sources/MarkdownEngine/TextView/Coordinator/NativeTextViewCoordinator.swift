@@ -52,6 +52,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         didSet {
             subscribeToBusNotifications(replacing: oldValue.services.bus)
             subscribeToAppearanceNotification()
+            subscribeToDiagramNotification()
             // Precompiled registry for the per-keystroke parse path — deriving
             // it from the configuration on every keystroke would rebuild the
             // delimiter arrays + fingerprint string each time.
@@ -71,6 +72,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var viewportObservers: [NSObjectProtocol] = []
     private var busObservers: [NSObjectProtocol] = []
     private var registeredAppearanceObserverName: Notification.Name?
+    private var registeredDiagramObserverName: Notification.Name?
     weak var textView: NSTextView?
     /// Owns the scroll-away header (build, content refresh, collapse/expand,
     /// teardown). Created on first reconcile with a non-nil header.
@@ -322,6 +324,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         super.init()
         // Init + didSet share this helper so the observer tracks whichever service is current.
         subscribeToAppearanceNotification()
+        subscribeToDiagramNotification()
     }
 
     /// (Re)register the syntax-highlighter appearance observer; idempotent and unsubscribes on nil.
@@ -340,6 +343,24 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
             object: nil
         )
         registeredAppearanceObserverName = name
+    }
+
+    /// (Re)register the diagram renderer's "a render finished" observer; idempotent like the appearance one.
+    private func subscribeToDiagramNotification() {
+        let target = configuration.services.diagrams.didRenderNotification
+        if registeredDiagramObserverName == target { return }
+        if let current = registeredDiagramObserverName {
+            NotificationCenter.default.removeObserver(self, name: current, object: nil)
+        }
+        registeredDiagramObserverName = nil
+        guard let name = target else { return }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDiagramDidRender(_:)),
+            name: name,
+            object: nil
+        )
+        registeredDiagramObserverName = name
     }
 
     /// Subscribe to whichever bus notification names the current configuration

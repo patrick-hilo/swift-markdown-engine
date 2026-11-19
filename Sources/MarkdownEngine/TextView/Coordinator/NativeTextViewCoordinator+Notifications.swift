@@ -77,4 +77,22 @@ extension NativeTextViewCoordinator {
         let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
         restyleTextView(tv, paragraphCandidates: [fullRange])
     }
+
+    /// A background diagram render finished: restyle the diagram blocks only,
+    /// so the rendered image replaces the code block without a full restyle.
+    @objc func handleDiagramDidRender(_ notification: Notification) {
+        guard let tv = textView else { return }
+        let text = tv.string
+        let nsText = text as NSString
+        let renderer = configuration.services.diagrams
+        let parsed = parsedDocument(for: text)
+        let paragraphs = parsed.codeBlockTokensWithIndices.compactMap { _, token -> NSRange? in
+            guard NSMaxRange(token.range) <= nsText.length,
+                  let language = MarkdownTokenizer.extractLanguage(from: token, in: text)?.lowercased(),
+                  renderer.handles(language: language) else { return nil }
+            return nsText.paragraphRange(for: token.range)
+        }
+        guard !paragraphs.isEmpty else { return }
+        restyleParagraphs(paragraphs, in: tv)
+    }
 }

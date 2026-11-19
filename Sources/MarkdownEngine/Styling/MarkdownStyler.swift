@@ -31,6 +31,7 @@ extension MarkdownStyler {
         let imageLink: [IndexedToken]
         let table: [IndexedToken]
         let code: [MarkdownToken]   // codeBlock + inlineCode, for isInsideCodeBlock checks
+        let codeBlock: [IndexedToken]
     }
 
     struct StylingContext {
@@ -62,6 +63,7 @@ extension MarkdownStyler {
         var imageEmbedIndexed: [IndexedToken] { classified?.imageEmbed ?? Self.indexed(tokens, .imageEmbed) }
         var imageLinkIndexed: [IndexedToken] { classified?.imageLink ?? Self.indexed(tokens, .imageLink) }
         var tableIndexed: [IndexedToken] { classified?.table ?? Self.indexed(tokens, .table) }
+        var codeBlockIndexed: [IndexedToken] { classified?.codeBlock ?? Self.indexed(tokens, .codeBlock) }
 
         static func indexed(_ tokens: [MarkdownToken], _ kind: MarkdownTokenKind) -> [IndexedToken] {
             tokens.enumerated().compactMap { $0.element.kind == kind ? ($0.offset, $0.element) : nil }
@@ -259,6 +261,7 @@ enum MarkdownStyler {
         result += styleImageLinks(ctx)
         let imgMs = Double(DispatchTime.now().uptimeNanoseconds - imgT0) / 1_000_000
         result += styleTables(ctx)
+        result += styleDiagramBlocks(ctx)
         PerfTrace.note { "  styleAttributes: ast=\(String(format: "%.2f", astMs))ms latex+img4=\(String(format: "%.2f", imgMs))ms styledRanges=\(result.count)" }
         return result
     }
