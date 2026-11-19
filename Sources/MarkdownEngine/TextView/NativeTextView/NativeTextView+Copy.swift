@@ -21,9 +21,10 @@ extension NativeTextView {
             super.copy(sender)
             return
         }
-        let raw = (string as NSString).substring(with: sel)
-        MarkdownPasteboardWriter.write(markdown: raw, to: .general, extensions: configuration.extensions,
+        MarkdownPasteboardWriter.write(selection: sel, of: string, to: .general,
+                                       extensions: configuration.extensions,
                                        directives: configuration.directives,
-                                       directiveSettings: configuration.directiveSettings)
+                                       directiveSettings: configuration.directiveSettings,
+                                       registry: configuration.extensionRegistry)
     }
 }

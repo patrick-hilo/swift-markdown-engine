@@ -26,17 +26,40 @@ enum MarkdownPasteboardWriter {
                       extensions: [any MarkdownExtension] = [],
                       directives: [any MarkdownDirective] = [],
                       directiveSettings: DirectiveRegistrySettings = .default) {
+        write(plain: markdown, markdown: markdown, rich: markdown, to: pasteboard, extensions: extensions,
+              directives: directives, directiveSettings: directiveSettings)
+    }
+
+    /// Writes the selected part of `source`, treating fenced code as code:
+    /// see ``copiedText(_:in:registry:)``. The private flavor keeps the exact
+    /// selection so a paste into one of our editors round-trips it.
+    @MainActor
+    static func write(selection: NSRange, of source: String, to pasteboard: NSPasteboard,
+                      extensions: [any MarkdownExtension] = [],
+                      directives: [any MarkdownDirective] = [],
+                      directiveSettings: DirectiveRegistrySettings = .default,
+                      registry: ExtensionRegistry = .empty) {
+        let raw = (source as NSString).substring(with: selection)
+        let copied = copiedText(selection, in: source, registry: registry)
+        write(plain: copied.plain, markdown: raw, rich: copied.rich, to: pasteboard, extensions: extensions,
+              directives: directives, directiveSettings: directiveSettings)
+    }
+
+    @MainActor
+    private static func write(plain: String, markdown: String, rich: String, to pasteboard: NSPasteboard,
+                              extensions: [any MarkdownExtension],
+                              directives: [any MarkdownDirective],
+                              directiveSettings: DirectiveRegistrySettings) {
         pasteboard.clearContents()
 
-        // Always keep the raw markdown available as plain text.
-        pasteboard.setString(markdown, forType: .string)
+        pasteboard.setString(plain, forType: .string)
 
         // Also keep the exact raw markdown under our private flavor so our own
         // paste path can round-trip it losslessly.
         pasteboard.setString(markdown, forType: Self.markdownType)
 
         // Render the selection to clean HTML.
-        let htmlBody = MarkdownHTMLRenderer.html(from: markdown, extensions: extensions,
+        let htmlBody = MarkdownHTMLRenderer.html(from: rich, extensions: extensions,
                                                  directives: directives, directiveSettings: directiveSettings)
         // Rich targets (web archive + RTF) show task items as plain bullets
         // (user's call); the .html flavor keeps the GFM checkbox markup so
@@ -72,6 +95,67 @@ enum MarkdownPasteboardWriter {
            ) {
             pasteboard.setData(rtf, forType: .rtf)
         }
+    }
+
+    /// Plain text and the markdown the rich flavors render for a selection.
+    struct CopiedText: Equatable {
+        let plain: String
+        let rich: String
+    }
+
+    /// Code lines carry no markdown of their own. A selection inside one
+    /// fenced block copies just its code as plain text: the fence lines are
+    /// hidden while the caret is outside the block, so a drag over the visible
+    /// block picks them up without the reader seeing them. Rich flavors get
+    /// the fences back wherever the selection starts or ends inside a block;
+    /// rendered without them, `# comment` became a heading and the lines ran
+    /// together into one paragraph.
+    static func copiedText(_ selection: NSRange, in source: String,
+                           registry: ExtensionRegistry = .empty) -> CopiedText {
+        let ns = source as NSString
+        let raw = ns.substring(with: selection)
+        let blocks = MarkdownTokenizer.parseTokensViaAST(in: source, registry: registry)
+            .filter { $0.kind == .codeBlock && NSIntersectionRange($0.range, selection).length > 0 }
+        guard !blocks.isEmpty else { return CopiedText(plain: raw, rich: raw) }
+
+        let start = selection.location
+        let end = NSMaxRange(selection)
+        func fences(of block: MarkdownToken) -> (open: String, close: String) {
+            let content = block.contentRange
+            let open = ns.substring(with: NSRange(location: block.range.location,
+                                                  length: content.location - block.range.location))
+            var close = ns.substring(with: NSRange(location: NSMaxRange(content),
+                                                   length: NSMaxRange(block.range) - NSMaxRange(content)))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if close.isEmpty {
+                close = String(open.trimmingCharacters(in: .whitespaces)
+                    .prefix { $0 == "`" || $0 == "~" })
+            }
+            return (open.hasSuffix("\n") ? open : open + "\n", close)
+        }
+        func ensuringNewline(_ text: String) -> String {
+            text.isEmpty || text.hasSuffix("\n") ? text : text + "\n"
+        }
+
+        if blocks.count == 1, let block = blocks.first,
+           start >= block.range.location, end <= NSMaxRange(block.range) {
+            let content = block.contentRange
+            let picked = NSIntersectionRange(selection, content)
+            guard picked.length > 0 else { return CopiedText(plain: raw, rich: raw) }
+            var plain = ns.substring(with: picked)
+            if end > NSMaxRange(content), plain.hasSuffix("\n") { plain.removeLast() }
+            let fence = fences(of: block)
+            return CopiedText(plain: plain, rich: fence.open + ensuringNewline(plain) + fence.close)
+        }
+
+        var rich = raw
+        if let first = blocks.first, start >= first.contentRange.location, start <= NSMaxRange(first.contentRange) {
+            rich = fences(of: first).open + rich
+        }
+        if let last = blocks.last, end >= last.contentRange.location, end <= NSMaxRange(last.contentRange) {
+            rich = ensuringNewline(rich) + fences(of: last).close
+        }
+        return CopiedText(plain: raw, rich: rich)
     }
 
     /// Stand-in for what RTF can't carry: the Cocoa HTML importer drops `<hr>`,
