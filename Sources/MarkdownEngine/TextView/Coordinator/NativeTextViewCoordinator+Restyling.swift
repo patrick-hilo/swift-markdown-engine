@@ -370,7 +370,8 @@ extension NativeTextViewCoordinator {
             classified: MarkdownStyler.ClassifiedStyleTokens(
                 inlineLatex: inlineLatexIdx, blockLatex: blockLatexIdx,
                 imageEmbed: imageEmbedIdx, imageLink: imageLinkIdx,
-                table: tableIdx, code: codeTokens),
+                table: tableIdx, code: codeTokens,
+                codeBlock: codeBlockTokensWithIndices.map { ($0.index, $0.token) }),
             version: parsedDocumentVersion
         )
         cachedParsedText = text
